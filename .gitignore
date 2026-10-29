@@ -1,0 +1,32 @@
+# Dependências e build
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Logs, cache e cobertura
+logs/
+*.log
+coverage/
+.nyc_output/
+.eslintcache
+
+# Dados locais de infra
+.localstack/
+tmp/
+temp/
+
+# Sistema e editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Acompanhamento local. Não faz parte da entrega.
+.cursor/
+CHECKLIST.local.md
