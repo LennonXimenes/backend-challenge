@@ -38,23 +38,38 @@ export interface MovementDecision {
   entry?: WalletLedgerEntry;
 }
 
+export function movementPayloadHash(input: Pick<
+  MovementInput,
+  | "externalTransactionId"
+  | "gameId"
+  | "kind"
+  | "money"
+  | "playerId"
+  | "providerId"
+  | "referenceExternalTransactionId"
+  | "roundId"
+  | "walletId"
+>): string {
+  return payloadHash({
+    externalTransactionId: input.externalTransactionId,
+    gameId: input.gameId,
+    kind: input.kind,
+    money: input.money.toJSON(),
+    playerId: input.playerId,
+    providerId: input.providerId,
+    referenceExternalTransactionId: input.referenceExternalTransactionId,
+    roundId: input.roundId,
+    walletId: input.walletId,
+  });
+}
+
 export function decideMovement(wallet: Wallet, input: MovementInput): MovementDecision {
   const transaction = WagerTransaction.create({
     id: input.transactionId,
     providerId: input.providerId,
     externalTransactionId: input.externalTransactionId,
     idempotencyKey: input.idempotencyKey,
-    payloadHash: payloadHash({
-      externalTransactionId: input.externalTransactionId,
-      gameId: input.gameId,
-      kind: input.kind,
-      money: input.money.toJSON(),
-      playerId: input.playerId,
-      providerId: input.providerId,
-      referenceExternalTransactionId: input.referenceExternalTransactionId,
-      roundId: input.roundId,
-      walletId: input.walletId,
-    }),
+    payloadHash: movementPayloadHash(input),
     walletId: input.walletId,
     playerId: input.playerId,
     roundId: input.roundId,

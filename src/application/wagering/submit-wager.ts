@@ -21,7 +21,7 @@ export interface SubmitWagerBody {
   status: WagerTransactionStatus;
   balance: { amount: string; currency: string };
   failureCode?: string;
-  idempotentReplay: false;
+  idempotentReplay: boolean;
 }
 
 export interface SubmitWagerResult {

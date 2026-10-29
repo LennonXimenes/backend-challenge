@@ -160,6 +160,115 @@ describe("POST /wagering/transactions", () => {
     );
     expect(ledger[0]?.count).toBe("1");
   });
+
+  test("replays the original balance and rejects a different payload for the same key", async () => {
+    const playerId = randomUUID();
+    const opened = await postJson("/wallets", {
+      playerId,
+      initialBalance: { amount: "100.00", currency: "BRL" },
+    });
+    const walletId = opened.body.id as string;
+    const bet = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-replay",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "25.00", currency: "BRL" },
+    });
+    expect(bet.status).toBe(201);
+
+    const replay = await postWager(bet.request);
+    expect(replay.status).toBe(201);
+    expect(replay.body).toMatchObject({
+      transactionId: bet.body.transactionId,
+      status: "PROCESSED",
+      balance: { amount: "75.00", currency: "BRL" },
+      idempotentReplay: true,
+    });
+
+    const rejected = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-replay",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "80.00", currency: "BRL" },
+    });
+    expect(rejected.status).toBe(422);
+    const rejectedReplay = await postWager(rejected.request);
+    expect(rejectedReplay.status).toBe(422);
+    expect(rejectedReplay.body).toMatchObject({
+      transactionId: rejected.body.transactionId,
+      status: "REJECTED",
+      failureCode: "INSUFFICIENT_BALANCE",
+      balance: { amount: "75.00", currency: "BRL" },
+      idempotentReplay: true,
+    });
+
+    const later = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-replay",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "10.00", currency: "BRL" },
+    });
+    expect(later.status).toBe(201);
+    expect(later.body).toMatchObject({ balance: { amount: "65.00", currency: "BRL" }, idempotentReplay: false });
+
+    const originalAgain = await postWager(bet.request);
+    expect(originalAgain.status).toBe(201);
+    expect(originalAgain.body).toMatchObject({
+      transactionId: bet.body.transactionId,
+      balance: { amount: "75.00", currency: "BRL" },
+      idempotentReplay: true,
+    });
+
+    const conflict = await postWager({
+      ...bet.request,
+      money: { amount: "30.00", currency: "BRL" },
+    });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body).toEqual({ error: "transaction_conflict" });
+
+    const wallet = await (await fetch(`${baseUrl}/wallets/${walletId}`)).json() as { version: number; balance: { amount: string } };
+    expect(wallet.balance.amount).toBe("65.00");
+    expect(wallet.version).toBe(3);
+
+    const rows = await orm.em.getConnection().execute<Array<{ debits: string; credits: string }>>(
+      `select count(*) filter (where direction = 'DEBIT')::text as debits,
+              count(*) filter (where direction = 'CREDIT')::text as credits
+       from wallet_ledger_entries
+       where wallet_id = ?::uuid`,
+      [walletId],
+    );
+    expect(rows[0]).toEqual({ debits: "2", credits: "1" });
+  });
+
+  test("a missing idempotency key is a bad request", async () => {
+    const response = await fetch(`${baseUrl}/wagering/transactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        providerId: "provider-a",
+        externalTransactionId: randomUUID(),
+        playerId: randomUUID(),
+        walletId: randomUUID(),
+        roundId: "round-key",
+        gameId: "fortune-chimp",
+        kind: "BET",
+        money: { amount: "1.00", currency: "BRL" },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
 });
 
 async function postJson(path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {

@@ -175,6 +175,10 @@ export class WagerTransaction {
     return this._referenceTransactionId;
   }
 
+  matchesPayload(hash: string): boolean {
+    return this.payloadHash === hash;
+  }
+
   markProcessed(at: Date, referenceTransactionId?: string): void {
     this.assertOpen();
     this._status = WagerTransactionStatus.Processed;

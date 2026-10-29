@@ -1,13 +1,18 @@
-import { UniqueConstraintViolationException } from "@mikro-orm/core";
-import { MikroORM } from "@mikro-orm/postgresql";
+import { LockMode } from "@mikro-orm/core";
+import { MikroORM, type EntityManager } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
-import { decideMovement, type ResolvedReference } from "../../application/wagering/decide-movement";
+import { decideMovement, movementPayloadHash, type ResolvedReference } from "../../application/wagering/decide-movement";
 import { httpStatusFor, type SubmitWagerResult } from "../../application/wagering/submit-wager";
 import { type StoredWager, WagerRepository } from "../../application/wagering/wager-repository";
-import { Money } from "../../domain/money/money";
 import { Wallet } from "../../domain/wallet/wallet";
 import { WalletNotFoundError } from "../../domain/wallet/wallet-error";
 import { WagerConflictError } from "../../domain/wager/wager-error";
+import { WagerTransaction } from "../../domain/wager/wager-transaction";
+import { constraintText } from "./constraint-error";
+import { ledgerRecordFrom } from "./ledger.record";
+import { normalizeAmount } from "./numeric-string.type";
+import { WagerRecord, transactionFromRecord, wagerRecordFrom } from "./wager.record";
+import { WalletRecord, walletFromRecord } from "./wallet.record";
 
 @Injectable()
 export class SqlWagerRepository extends WagerRepository {
@@ -16,122 +21,56 @@ export class SqlWagerRepository extends WagerRepository {
   }
 
   async submit(input: StoredWager): Promise<SubmitWagerResult> {
+    const hash = movementPayloadHash(input);
+
     try {
       return await this.orm.em.fork().transactional(async (em) => {
-        const ctx = em.getTransactionContext();
-        const connection = em.getConnection();
-        const locked = await connection.execute<WalletRow[]>(
-          `select id, player_id, currency, balance::text as balance, version, created_at, updated_at
-           from wallets
-           where id = ?::uuid
-           for update`,
-          [input.walletId],
-          "all",
-          ctx,
-        );
-        const row = locked[0];
-        if (!row) {
+        const already = await findByKey(em, input.idempotencyKey);
+        if (already) {
+          return replay(already, hash);
+        }
+
+        const walletRecord = await em.findOne(WalletRecord, { id: input.walletId }, {
+          lockMode: LockMode.PESSIMISTIC_WRITE,
+        });
+        if (!walletRecord) {
           throw new WalletNotFoundError(input.walletId);
         }
 
-        const wallet = rehydrateWallet(row);
-        const previousVersion = wallet.version;
+        const raced = await findByKey(em, input.idempotencyKey);
+        if (raced) {
+          return replay(raced, hash);
+        }
+
         const reference = input.referenceExternalTransactionId
-          ? await loadReference(connection, ctx, input.providerId, input.referenceExternalTransactionId)
+          ? await findReference(em, input.providerId, input.referenceExternalTransactionId)
           : undefined;
+        const wallet = walletFromRecord(walletRecord);
         const decision = decideMovement(wallet, { ...input, reference });
+        const observed = { amount: wallet.balance.toJSON().amount, currency: wallet.currency };
 
-        await connection.execute(
-          `insert into wager_transactions (
-             id, provider_id, external_transaction_id, idempotency_key, payload_hash,
-             wallet_id, player_id, round_id, game_id, kind, amount, currency,
-             reference_external_transaction_id, reference_transaction_id, status, failure_code, created_at, processed_at
-           ) values (
-             ?::uuid, ?, ?, ?, ?,
-             ?::uuid, ?::uuid, ?, ?, ?, ?::numeric, ?,
-             ?, ?::uuid, ?, ?, ?::timestamptz, ?::timestamptz
-           )`,
-          [
-            decision.transaction.id,
-            decision.transaction.providerId,
-            decision.transaction.externalTransactionId,
-            decision.transaction.idempotencyKey,
-            decision.transaction.payloadHash,
-            decision.transaction.walletId,
-            decision.transaction.playerId,
-            decision.transaction.roundId,
-            decision.transaction.gameId,
-            decision.transaction.kind,
-            decision.transaction.money.toJSON().amount,
-            decision.transaction.money.currency,
-            decision.transaction.referenceExternalTransactionId ?? null,
-            decision.transaction.referenceTransactionId ?? null,
-            decision.transaction.status,
-            decision.transaction.failureCode ?? null,
-            decision.transaction.createdAt.toISOString(),
-            decision.transaction.processedAt?.toISOString() ?? null,
-          ],
-          "run",
-          ctx,
-        );
+        em.persist(wagerRecordFrom(decision.transaction, observed));
+        await em.flush();
 
-        const entry = decision.entry;
-        if (entry) {
-          const updated = await connection.execute<Array<{ id: string }>>(
-            `update wallets
-             set balance = ?::numeric, version = ?, updated_at = ?::timestamptz
-             where id = ?::uuid and version = ?
-             returning id`,
-            [
-              wallet.balance.toJSON().amount,
-              wallet.version,
-              wallet.updatedAt.toISOString(),
-              wallet.id,
-              previousVersion,
-            ],
-            "all",
-            ctx,
-          );
-          if (updated.length === 0) {
-            throw new WagerConflictError();
-          }
-
-          await connection.execute(
-            `insert into wallet_ledger_entries (
-               id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at
-             ) values (
-               ?::uuid, ?::uuid, ?::uuid, ?, ?::numeric, ?, ?::numeric, ?::numeric, ?::timestamptz
-             )`,
-            [
-              entry.id,
-              entry.walletId,
-              entry.transactionId,
-              entry.direction,
-              entry.money.toJSON().amount,
-              entry.money.currency,
-              entry.balanceBefore.toJSON().amount,
-              entry.balanceAfter.toJSON().amount,
-              entry.createdAt.toISOString(),
-            ],
-            "run",
-            ctx,
-          );
+        if (decision.entry) {
+          applyBalance(walletRecord, wallet);
+          em.persist(ledgerRecordFrom(decision.entry));
+          await em.flush();
         }
 
-        const body: SubmitWagerResult["body"] = {
-          transactionId: decision.transaction.id,
-          status: decision.transaction.status,
-          balance: wallet.balance.toJSON(),
-          idempotentReplay: false,
-        };
-        if (decision.transaction.failureCode) {
-          body.failureCode = decision.transaction.failureCode;
-        }
-
-        return { httpStatus: httpStatusFor(decision.transaction.status), body };
+        return resultFrom(decision.transaction, observed, false);
       }, { clear: true });
     } catch (error) {
-      if (isTransactionConflict(error)) {
+      if (error instanceof WagerConflictError || error instanceof WalletNotFoundError) {
+        throw error;
+      }
+
+      const text = constraintText(error);
+      if (text.includes("wager_transactions_idempotency_key_unique")) {
+        return this.replayCommitted(hash, input.idempotencyKey);
+      }
+
+      if (text.includes("wager_transactions_provider_external_unique")) {
         throw new WagerConflictError();
       }
 
@@ -139,99 +78,73 @@ export class SqlWagerRepository extends WagerRepository {
     }
   }
 
+  private async replayCommitted(hash: string, idempotencyKey: string): Promise<SubmitWagerResult> {
+    const existing = await this.orm.em.fork().findOne(WagerRecord, { idempotencyKey });
+    if (!existing) {
+      throw new WagerConflictError();
+    }
+
+    return replay(existing, hash);
+  }
 }
 
-async function loadReference(
-  connection: ReturnType<MikroORM["em"]["getConnection"]>,
-  ctx: ReturnType<MikroORM["em"]["getTransactionContext"]>,
+function applyBalance(record: WalletRecord, wallet: Wallet): void {
+  record.balance = wallet.balance.toJSON().amount;
+  record.version = wallet.version;
+  record.updatedAt = wallet.updatedAt;
+}
+
+async function findByKey(em: EntityManager, idempotencyKey: string): Promise<WagerRecord | null> {
+  return em.findOne(WagerRecord, { idempotencyKey });
+}
+
+async function findReference(
+  em: EntityManager,
   providerId: string,
   externalTransactionId: string,
 ): Promise<ResolvedReference | undefined> {
-  const rows = await connection.execute<ReferenceRow[]>(
-    `select id, kind, status, player_id, wallet_id, round_id, currency
-     from wager_transactions
-     where provider_id = ? and external_transaction_id = ?`,
-    [providerId, externalTransactionId],
-    "all",
-    ctx,
-  );
-  const row = rows[0];
-  if (!row) {
+  const record = await em.findOne(WagerRecord, { providerId, externalTransactionId });
+  if (!record) {
     return undefined;
   }
 
   return {
-    id: row.id,
-    kind: row.kind,
-    status: row.status,
-    playerId: row.player_id,
-    walletId: row.wallet_id,
-    roundId: row.round_id,
-    currency: row.currency.trim(),
+    id: record.id,
+    kind: record.kind,
+    status: record.status,
+    playerId: record.playerId,
+    walletId: record.walletId,
+    roundId: record.roundId,
+    currency: record.currency.trim(),
   };
 }
 
-interface WalletRow {
-  id: string;
-  player_id: string;
-  currency: string;
-  balance: string;
-  version: number | string;
-  created_at: string | Date;
-  updated_at: string | Date;
-}
-
-interface ReferenceRow {
-  id: string;
-  kind: string;
-  status: string;
-  player_id: string;
-  wallet_id: string;
-  round_id: string;
-  currency: string;
-}
-
-function rehydrateWallet(row: WalletRow): Wallet {
-  const currency = row.currency.trim();
-  return Wallet.rehydrate({
-    id: row.id,
-    playerId: row.player_id,
-    currency,
-    balance: Money.from({ amount: normalizeAmount(row.balance), currency }),
-    version: Number(row.version),
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
-  });
-}
-
-function normalizeAmount(amount: string): string {
-  const [whole = "0", fraction = ""] = amount.split(".");
-  return `${whole}.${fraction.padEnd(2, "0").slice(0, 2)}`;
-}
-
-function isTransactionConflict(error: unknown): boolean {
-  const parts: string[] = [];
-  const queue: unknown[] = [error];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-
-    if (current instanceof UniqueConstraintViolationException || current instanceof Error) {
-      parts.push(current.message);
-    }
-
-    if ("constraint" in current && typeof current.constraint === "string") {
-      parts.push(current.constraint);
-    }
-
-    if ("cause" in current) {
-      queue.push(current.cause);
-    }
+function replay(record: WagerRecord, hash: string): SubmitWagerResult {
+  const transaction = transactionFromRecord(record);
+  if (!transaction.matchesPayload(hash)) {
+    throw new WagerConflictError();
   }
 
-  const text = parts.join(" ");
-  return text.includes("wager_transactions_idempotency_key_unique") || text.includes("wager_transactions_provider_external_unique");
+  return resultFrom(transaction, {
+    amount: record.observedBalance,
+    currency: record.observedCurrency.trim(),
+  }, true);
+}
+
+function resultFrom(
+  transaction: WagerTransaction,
+  observed: { amount: string; currency: string },
+  idempotentReplay: boolean,
+): SubmitWagerResult {
+  const body: SubmitWagerResult["body"] = {
+    transactionId: transaction.id,
+    status: transaction.status,
+    balance: { amount: normalizeAmount(observed.amount), currency: observed.currency.trim() },
+    idempotentReplay,
+  };
+  if (transaction.failureCode) {
+    body.failureCode = transaction.failureCode;
+  }
+
+  return { httpStatus: httpStatusFor(transaction.status), body };
 }

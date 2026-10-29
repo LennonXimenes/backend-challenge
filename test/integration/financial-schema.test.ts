@@ -44,10 +44,12 @@ describe("financial schema", () => {
         'wager_transactions_provider_external_unique',
         'wager_transactions_idempotency_key_unique',
         'wallet_ledger_entries_one_per_transaction',
-        'wallet_ledger_entries_balanced'
+        'wallet_ledger_entries_balanced',
+        'wager_transactions_observed_balance_non_negative',
+        'wager_transactions_observed_currency_iso'
       )`,
     );
-    expect(new Set(constraints.map((row) => row.conname)).size).toBe(6);
+    expect(new Set(constraints.map((row) => row.conname)).size).toBe(8);
 
     const trigger = await query<{ tgname: string }>(
       `select tgname from pg_trigger where tgname = 'wallet_ledger_entries_no_mutation' and not tgisinternal`,
@@ -81,24 +83,28 @@ describe("financial schema", () => {
     await query(
       `insert into wager_transactions (
          id, provider_id, external_transaction_id, idempotency_key, payload_hash,
-         wallet_id, player_id, round_id, game_id, kind, amount, currency, status, created_at
+         wallet_id, player_id, round_id, game_id, kind, amount, currency,
+         observed_balance, observed_currency, status, created_at
        ) values (
          ?::uuid, 'provider-a', 'transaction-123', 'provider-a:transaction-123', 'hash-1',
-         ?::uuid, ?::uuid, 'round-1', 'fortune-chimp', 'BET', ?::numeric, 'BRL', 'PROCESSED', ?::timestamptz
+         ?::uuid, ?::uuid, 'round-1', 'fortune-chimp', 'BET', ?::numeric, 'BRL',
+         ?::numeric, 'BRL', 'PROCESSED', ?::timestamptz
        )`,
-      [transactionId, walletId, playerId, "80.00", now],
+      [transactionId, walletId, playerId, "80.00", "20.00", now],
     );
 
     await expect(
       query(
         `insert into wager_transactions (
            id, provider_id, external_transaction_id, idempotency_key, payload_hash,
-           wallet_id, player_id, round_id, game_id, kind, amount, currency, status, created_at
+           wallet_id, player_id, round_id, game_id, kind, amount, currency,
+           observed_balance, observed_currency, status, created_at
          ) values (
            ?::uuid, 'provider-a', 'transaction-123', 'provider-a:other', 'hash-2',
-           ?::uuid, ?::uuid, 'round-1', 'fortune-chimp', 'BET', ?::numeric, 'BRL', 'PROCESSED', ?::timestamptz
+           ?::uuid, ?::uuid, 'round-1', 'fortune-chimp', 'BET', ?::numeric, 'BRL',
+           ?::numeric, 'BRL', 'PROCESSED', ?::timestamptz
          )`,
-        ["77777777-7777-4777-8777-777777777777", walletId, playerId, "10.00", now],
+        ["77777777-7777-4777-8777-777777777777", walletId, playerId, "10.00", "100.00", now],
       ),
     ).rejects.toThrow(/wager_transactions_provider_external_unique/);
 
@@ -106,12 +112,14 @@ describe("financial schema", () => {
       query(
         `insert into wager_transactions (
            id, provider_id, external_transaction_id, idempotency_key, payload_hash,
-           wallet_id, player_id, round_id, game_id, kind, amount, currency, status, created_at
+           wallet_id, player_id, round_id, game_id, kind, amount, currency,
+           observed_balance, observed_currency, status, created_at
          ) values (
            ?::uuid, 'provider-a', 'transaction-999', 'provider-a:transaction-123', 'hash-3',
-           ?::uuid, ?::uuid, 'round-1', 'fortune-chimp', 'BET', ?::numeric, 'BRL', 'PROCESSED', ?::timestamptz
+           ?::uuid, ?::uuid, 'round-1', 'fortune-chimp', 'BET', ?::numeric, 'BRL',
+           ?::numeric, 'BRL', 'PROCESSED', ?::timestamptz
          )`,
-        ["99999999-9999-4999-8999-999999999999", walletId, playerId, "10.00", now],
+        ["99999999-9999-4999-8999-999999999999", walletId, playerId, "10.00", "100.00", now],
       ),
     ).rejects.toThrow(/wager_transactions_idempotency_key_unique/);
 
