@@ -20,6 +20,8 @@ MikroORM 7 fala com o PostgreSQL. A aplicação Nest ainda não abre conexão: a
 
 O schema deste passo é SQL explícito, não diff de entity. Ainda não há entity. `snapshot` fica desligado para o ORM não comparar um modelo vazio com o banco e gerar uma migration contrária.
 
+Dinheiro no domínio é a classe `Money`, imutável, com `decimal.js`. A entrada é string. Mais de duas casas é erro, sem arredondamento. `number`, `float` e `double` não entram no contrato. A classe não importa Nest nem MikroORM. O valor que cabe no banco tem no máximo 17 dígitos antes da vírgula, o limite de `numeric(19, 2)`.
+
 Dinheiro persiste em `numeric(19, 2)`. Não há coluna `float` nem `double precision`. O saldo da wallet tem `check (balance >= 0)`. O lançamento do ledger confere a aritmética no banco (`balance_before ± amount = balance_after`) e um trigger recusa `update` e `delete`.
 
 Unicidade já coberta: uma wallet por jogador e moeda, uma transação por provedor e id externo, uma idempotency key, um lançamento por wallet e transação, e uma reversão viva (`PENDING`, `PENDING_REFERENCE` ou `PROCESSED`) por referência e tipo.
@@ -28,4 +30,4 @@ Inbox e outbox ainda não têm tabela. Entram com a mensageria.
 
 ## Ainda em aberto
 
-`Money` no domínio, entities do ORM, lock da wallet e o mapa de portas.
+Entities do ORM, `POST /wallets` com `OPENING` e ledger na mesma transação, lock da wallet e o mapa de portas.
