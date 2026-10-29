@@ -14,6 +14,18 @@ Três pastas separam o código, ainda sem regra de negócio:
 
 Compose local sobe PostgreSQL 16 e LocalStack só com SQS. A aplicação ainda não conecta nos dois.
 
+## ORM e schema
+
+MikroORM 7 fala com o PostgreSQL. A aplicação Nest ainda não abre conexão: a migration roda por `bun run migration:up` e `bun run migration:down`.
+
+O schema deste passo é SQL explícito, não diff de entity. Ainda não há entity. `snapshot` fica desligado para o ORM não comparar um modelo vazio com o banco e gerar uma migration contrária.
+
+Dinheiro persiste em `numeric(19, 2)`. Não há coluna `float` nem `double precision`. O saldo da wallet tem `check (balance >= 0)`. O lançamento do ledger confere a aritmética no banco (`balance_before ± amount = balance_after`) e um trigger recusa `update` e `delete`.
+
+Unicidade já coberta: uma wallet por jogador e moeda, uma transação por provedor e id externo, uma idempotency key, um lançamento por wallet e transação, e uma reversão viva (`PENDING`, `PENDING_REFERENCE` ou `PROCESSED`) por referência e tipo.
+
+Inbox e outbox ainda não têm tabela. Entram com a mensageria.
+
 ## Ainda em aberto
 
-ORM (MikroORM é o preferido do desafio; TypeORM é aceito), migrations, `Money` e o mapa de portas. Entram no próximo passo, junto com a justificativa.
+`Money` no domínio, entities do ORM, lock da wallet e o mapa de portas.
