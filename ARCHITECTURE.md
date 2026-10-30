@@ -74,7 +74,7 @@ O `payloadHash` é SHA-256 do JSON canônico, só com campos de negócio. A mesm
 
 `PENDING_REFERENCE` tenta cinco vezes: 1s, 2s, 4s, 8s e 16s. Depois disso, `REFERENCE_NOT_FOUND`.
 
-HTTP: `201` processada, `202` pendente, `422` rejeição, `400` payload, `404` ausente, `409` conflito. Health não pede autenticação.
+HTTP: `201` processada, `202` pendente, `422` rejeição, `400` payload, `404` ausente, `409` conflito, `503` falha transitória. Erro de programa fica `500`. O mesmo mapa vale para todos os endpoints. Health não pede autenticação.
 
 `GET /wallets/:walletId/ledger` lê o ledger em ordem de `created_at` e, no empate, `id`. O cursor é o id do último lançamento da página, em base64url. A página seguinte traz só linhas da mesma wallet com `(created_at, id)` maior que essa. O mesmo cursor devolve a mesma página; um lançamento novo aparece depois dela. O limite padrão é 50 e o teto é 100. Cursor ou limite inválido responde `400`. Wallet ausente responde `404`. Valor e saldo saem como string decimal. A rota só lê.
 
@@ -86,7 +86,7 @@ HTTP: `201` processada, `202` pendente, `422` rejeição, `400` payload, `404` a
 
 Auth não entra nesta entrega. Não há tabela de usuário nem hash de senha. O desenho adiado é um IdP externo, Keycloak, na frente de `POST /wallets` e `POST /wagering/transactions`. O ponto de extensão é `ProviderIdentityPort`: `UnconfiguredIdentity` recusa o token até o IdP existir, e `OpenAccessGuard` hoje libera o acesso. Esse guard não está registrado. `GET /health/live` e `GET /health/ready` continuam abertos. A fila é canal interno. O `providerId` e o `playerId` da mensagem passam pela mesma regra do domínio: jogador diferente da wallet fica `REJECTED` com `PLAYER_MISMATCH`, sem lançamento.
 
-Limites conhecidos: falha transitória na HTTP ainda responde `500`, o mesmo corpo de um erro de programa. As métricas morrem com o processo e não se somam entre instâncias. A corrida do saldo prova o Postgres; ela não atravessa a fila. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
+Limites conhecidos: as métricas morrem com o processo e não se somam entre instâncias. A corrida do saldo prova o Postgres; ela não atravessa a fila. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
 
 ## SQS
 

@@ -1,7 +1,5 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus } from "@nestjs/common";
-import { InvalidMoneyError } from "../../domain/money/money-error";
-import { InvalidWalletInputError, WalletAlreadyExistsError, WalletNotFoundError } from "../../domain/wallet/wallet-error";
-import { TransactionNotFoundError, WagerConflictError } from "../../domain/wager/wager-error";
+import { ArgumentsHost, Catch, ExceptionFilter } from "@nestjs/common";
+import { httpFailure } from "../../application/http/http-failure";
 import { writeOperationLog } from "../../application/observability/operation-log";
 
 interface RequestLogSource {
@@ -30,31 +28,7 @@ export class WalletExceptionFilter implements ExceptionFilter {
       error: exception instanceof Error ? exception.name : "Error",
     });
 
-    if (exception instanceof InvalidMoneyError || exception instanceof InvalidWalletInputError) {
-      response.status(HttpStatus.BAD_REQUEST).json({ error: "invalid_payload" });
-      return;
-    }
-
-    if (exception instanceof WalletAlreadyExistsError) {
-      response.status(HttpStatus.CONFLICT).json({ error: "wallet_conflict" });
-      return;
-    }
-
-    if (exception instanceof WagerConflictError) {
-      response.status(HttpStatus.CONFLICT).json({ error: "transaction_conflict" });
-      return;
-    }
-
-    if (exception instanceof WalletNotFoundError) {
-      response.status(HttpStatus.NOT_FOUND).json({ error: "wallet_not_found" });
-      return;
-    }
-
-    if (exception instanceof TransactionNotFoundError) {
-      response.status(HttpStatus.NOT_FOUND).json({ error: "transaction_not_found" });
-      return;
-    }
-
-    response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ error: "internal" });
+    const failure = httpFailure(exception);
+    response.status(failure.status).json(failure.body);
   }
 }

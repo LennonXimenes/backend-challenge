@@ -68,6 +68,35 @@ export function isLockConflict(error: unknown): boolean {
   return text.includes("40p01") || text.includes("55p03") || text.includes("deadlock") || text.includes("lock timeout");
 }
 
+const TRANSIENT_MARKERS = [
+  "40p01",
+  "55p03",
+  "40001",
+  "53300",
+  "57p01",
+  "57p03",
+  "08000",
+  "08001",
+  "08003",
+  "08004",
+  "08006",
+  "econnrefused",
+  "econnreset",
+  "etimedout",
+  "eai_again",
+  "deadlock",
+  "lock timeout",
+  "connection terminated",
+  "too many connections",
+  "the database system is shutting down",
+  "could not connect",
+];
+
+export function isTransientFailure(error: unknown): boolean {
+  const text = errorText(error).toLowerCase();
+  return TRANSIENT_MARKERS.some((marker) => text.includes(marker));
+}
+
 export function metricsSnapshot(): MetricsSnapshot {
   return {
     transactionsByStatus: { ...counters.transactionsByStatus },
