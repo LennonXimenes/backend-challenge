@@ -31,8 +31,12 @@ export function parseWagerBody(body: unknown, idempotencyKey: string | undefined
     throw new InvalidWalletInputError("money amount and currency must be strings");
   }
 
-  if (record.kind !== WagerTransactionKind.Bet && record.kind !== WagerTransactionKind.Win) {
-    throw new InvalidWalletInputError("kind must be BET or WIN");
+  if (
+    record.kind !== WagerTransactionKind.Bet &&
+    record.kind !== WagerTransactionKind.Win &&
+    record.kind !== WagerTransactionKind.Loss
+  ) {
+    throw new InvalidWalletInputError("kind must be BET, WIN or LOSS");
   }
 
   const reference = record.referenceExternalTransactionId;

@@ -319,6 +319,68 @@ describe("POST /wagering/transactions", () => {
     expect(unpublished[0]?.count).toBe("0");
   });
 
+  test("a loss stays processed without a ledger entry or a balance change", async () => {
+    const playerId = randomUUID();
+    const opened = await postJson("/wallets", {
+      playerId,
+      initialBalance: { amount: "40.00", currency: "BRL" },
+    });
+    const walletId = opened.body.id as string;
+    const loss = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-loss",
+      gameId: "fortune-chimp",
+      kind: "LOSS",
+      money: { amount: "15.00", currency: "BRL" },
+    });
+
+    expect(loss.status).toBe(201);
+    expect(loss.body).toMatchObject({
+      status: "PROCESSED",
+      balance: { amount: "40.00", currency: "BRL" },
+      idempotentReplay: false,
+    });
+    expect(await eventTypes(loss.body.transactionId as string)).toEqual(["WagerTransactionProcessed"]);
+
+    const replay = await postWager(loss.request);
+    expect(replay.status).toBe(201);
+    expect(replay.body).toMatchObject({
+      transactionId: loss.body.transactionId,
+      balance: { amount: "40.00", currency: "BRL" },
+      idempotentReplay: true,
+    });
+
+    const pending = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-loss",
+      gameId: "fortune-chimp",
+      kind: "LOSS",
+      money: { amount: "5.00", currency: "BRL" },
+      referenceExternalTransactionId: "bet-not-here",
+    });
+    expect(pending.status).toBe(202);
+    expect(pending.body).toMatchObject({
+      status: "PENDING_REFERENCE",
+      balance: { amount: "40.00", currency: "BRL" },
+    });
+
+    const wallet = await (await fetch(`${baseUrl}/wallets/${walletId}`)).json() as { version: number; balance: { amount: string } };
+    expect(wallet.balance.amount).toBe("40.00");
+    expect(wallet.version).toBe(1);
+    const ledger = await orm.em.getConnection().execute<Array<{ count: string }>>(
+      `select count(*)::text as count from wallet_ledger_entries where wallet_id = ?::uuid`,
+      [walletId],
+    );
+    expect(ledger[0]?.count).toBe("1");
+    expect(await eventTypes(loss.body.transactionId as string)).toEqual(["WagerTransactionProcessed"]);
+  });
+
   test("a missing idempotency key is a bad request", async () => {
     const response = await fetch(`${baseUrl}/wagering/transactions`, {
       method: "POST",

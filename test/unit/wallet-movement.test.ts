@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { decideMovement } from "../../src/application/wagering/decide-movement";
+import { outboxForTransaction } from "../../src/application/integration/outbox-for-transaction";
 import { Money } from "../../src/domain/money/money";
 import { CurrencyMismatchError } from "../../src/domain/money/money-error";
 import { LedgerDirection } from "../../src/domain/wallet/ledger-direction";
@@ -102,6 +104,38 @@ describe("wallet movements", () => {
     expect(transaction.failureCode).toBe(FailureCode.InsufficientBalance);
     expect(() => transaction.markProcessed(at)).toThrow(InvalidTransactionStateError);
     expect(() => transaction.fail("INFRA")).toThrow(InvalidTransactionStateError);
+  });
+
+  test("a loss is processed without a ledger entry or a balance change", () => {
+    const wallet = openedWallet();
+    const decision = decideMovement(wallet, {
+      transactionId,
+      ledgerId,
+      providerId: "provider-a",
+      externalTransactionId: "loss-1",
+      idempotencyKey: "provider-a:loss-1",
+      playerId,
+      walletId,
+      roundId: "round-1",
+      gameId: "fortune-chimp",
+      kind: WagerTransactionKind.Loss,
+      money: Money.from({ amount: "25.00", currency: "BRL" }),
+      at,
+    });
+
+    expect(decision.entry).toBeUndefined();
+    expect(decision.transaction.status).toBe(WagerTransactionStatus.Processed);
+    expect(wallet.balance.toJSON().amount).toBe("100.00");
+    expect(wallet.version).toBe(1);
+    expect(outboxForTransaction({
+      transaction: decision.transaction,
+      wallet,
+      eventId: "99999999-9999-4999-8999-999999999999",
+      occurredAt: at,
+    }).map((message) => message.eventType)).toEqual(["WagerTransactionProcessed"]);
+  });
+
+  test("opening cannot be submitted", () => {
     expect(() => WagerTransaction.create({
       id: transactionId,
       providerId: "internal",

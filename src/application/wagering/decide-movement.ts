@@ -26,7 +26,7 @@ export interface MovementInput {
   walletId: string;
   roundId: string;
   gameId: string;
-  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win;
+  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss;
   money: Wallet["balance"];
   referenceExternalTransactionId?: string;
   reference?: ResolvedReference;
@@ -85,7 +85,12 @@ export function decideMovement(wallet: Wallet, input: MovementInput): MovementDe
     return { transaction };
   }
 
-  if (input.kind === WagerTransactionKind.Win && input.referenceExternalTransactionId) {
+  if (input.kind === WagerTransactionKind.Loss && input.money.currency !== wallet.currency) {
+    transaction.reject(FailureCode.CurrencyMismatch);
+    return { transaction };
+  }
+
+  if ((input.kind === WagerTransactionKind.Win || input.kind === WagerTransactionKind.Loss) && input.referenceExternalTransactionId) {
     if (!input.reference) {
       transaction.markPendingReference();
       return { transaction };
@@ -95,6 +100,11 @@ export function decideMovement(wallet: Wallet, input: MovementInput): MovementDe
       transaction.reject(FailureCode.InvalidReference);
       return { transaction };
     }
+  }
+
+  if (input.kind === WagerTransactionKind.Loss) {
+    transaction.markProcessed(input.at, input.reference?.id);
+    return { transaction };
   }
 
   try {
