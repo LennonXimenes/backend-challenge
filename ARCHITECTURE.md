@@ -86,7 +86,7 @@ HTTP: `201` processada, `202` pendente, `422` rejeição, `400` payload, `404` a
 
 Auth não entra nesta entrega. Não há tabela de usuário nem hash de senha. O desenho adiado é um IdP externo, Keycloak, na frente de `POST /wallets` e `POST /wagering/transactions`. O ponto de extensão é `ProviderIdentityPort`: `UnconfiguredIdentity` recusa o token até o IdP existir, e `OpenAccessGuard` hoje libera o acesso. Esse guard não está registrado. `GET /health/live` e `GET /health/ready` continuam abertos. A fila é canal interno. O `providerId` e o `playerId` da mensagem passam pela mesma regra do domínio: jogador diferente da wallet fica `REJECTED` com `PLAYER_MISMATCH`, sem lançamento.
 
-Limites conhecidos: as métricas morrem com o processo e não se somam entre instâncias. A corrida do saldo prova o Postgres; ela não atravessa a fila. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
+Limites conhecidos: as métricas morrem com o processo e não se somam entre instâncias. A corrida de duas apostas de `80.00` também passa por dois consumidores na fila real. As outras corridas ficam na HTTP contra o Postgres. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
 
 ## SQS
 

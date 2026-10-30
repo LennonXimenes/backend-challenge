@@ -100,6 +100,30 @@ describe("sqs consumer", () => {
     await running;
   }, 30_000);
 
+  test("two consumers racing two bets of 80 through the queue leave one debit", async () => {
+    const playerId = randomUUID();
+    const walletId = await openWallet(playerId, "100.00");
+    const first = new SqsWagerConsumer(sqs, app.get(SubmitWager), queueUrl, dlqUrl);
+    const second = new SqsWagerConsumer(sqs, app.get(SubmitWager), queueUrl, dlqUrl);
+    const running = Promise.all([first.run(), second.run()]);
+    await sendBet(walletId, playerId, "80.00");
+    await sendBet(walletId, playerId, "80.00");
+    await waitFor(async () => {
+      const rows = await betRows(walletId);
+      return rows.length === 2 && await debits(walletId) === 1 && await queueDepth(queueUrl) === 0;
+    });
+
+    const rows = await betRows(walletId);
+    expect(rows.map((row) => row.status).sort()).toEqual(["PROCESSED", "REJECTED"]);
+    expect(rows.find((row) => row.status === "REJECTED")?.failure_code).toBe("INSUFFICIENT_BALANCE");
+    expect(await wallet(walletId)).toMatchObject({ version: 2, balance: { amount: "20.00" } });
+    expect(await reconstructed(walletId)).toBe("20.00");
+    expect(await queueDepth(dlqUrl)).toBe(0);
+    await first.stop();
+    await second.stop();
+    await running;
+  }, 30_000);
+
   test("acks a business rejection and parks an invalid payload on the dlq", async () => {
     const playerId = randomUUID();
     const walletId = await openWallet(playerId, "10.00");
@@ -233,6 +257,21 @@ async function send(url: string, groupId: string, body: string): Promise<void> {
   }));
 }
 
+async function sendBet(walletId: string, playerId: string, amount: string): Promise<void> {
+  const externalTransactionId = randomUUID();
+  await send(queueUrl, randomUUID(), envelope(randomUUID(), {
+    providerId: "provider-a",
+    externalTransactionId,
+    idempotencyKey: `provider-a:${externalTransactionId}`,
+    playerId,
+    walletId,
+    roundId: "round-sqs-race",
+    gameId: "fortune-chimp",
+    kind: "BET",
+    money: { amount, currency: "BRL" },
+  }));
+}
+
 async function openWallet(playerId: string, amount: string): Promise<string> {
   const response = await fetch(`${baseUrl}/wallets`, {
     method: "POST",
@@ -254,6 +293,13 @@ async function inboxCount(messageId: string): Promise<number> {
     [messageId],
   );
   return Number(rows[0]?.count ?? "0");
+}
+
+async function betRows(walletId: string): Promise<Array<{ status: string; failure_code: string | null }>> {
+  return orm.em.getConnection().execute<Array<{ status: string; failure_code: string | null }>>(
+    `select status, failure_code from wager_transactions where wallet_id = ?::uuid and kind = 'BET'`,
+    [walletId],
+  );
 }
 
 async function debits(walletId: string): Promise<number> {
