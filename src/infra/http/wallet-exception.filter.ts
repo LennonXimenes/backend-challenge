@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus, Logger } from "@nestjs/common";
 import { InvalidMoneyError } from "../../domain/money/money-error";
 import { InvalidWalletInputError, WalletAlreadyExistsError, WalletNotFoundError } from "../../domain/wallet/wallet-error";
+import { WagerConflictError } from "../../domain/wager/wager-error";
 
 interface JsonResponse {
   status(code: number): { json(body: unknown): void };
@@ -20,6 +21,11 @@ export class WalletExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof WalletAlreadyExistsError) {
       response.status(HttpStatus.CONFLICT).json({ error: "wallet_conflict" });
+      return;
+    }
+
+    if (exception instanceof WagerConflictError) {
+      response.status(HttpStatus.CONFLICT).json({ error: "transaction_conflict" });
       return;
     }
 

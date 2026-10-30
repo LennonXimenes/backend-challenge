@@ -1,6 +1,7 @@
+import { CurrencyMismatchError } from "../money/money-error";
 import { Money } from "../money/money";
 import { LedgerDirection } from "./ledger-direction";
-import { InvalidWalletInputError } from "./wallet-error";
+import { InsufficientBalanceError, InvalidWalletInputError } from "./wallet-error";
 import { WalletLedgerEntry } from "./wallet-ledger-entry";
 import { WagerTransaction } from "../wager/wager-transaction";
 
@@ -29,10 +30,10 @@ export class Wallet {
     readonly id: string,
     readonly playerId: string,
     readonly currency: string,
-    private readonly _balance: Money,
-    private readonly _version: number,
+    private _balance: Money,
+    private _version: number,
     readonly createdAt: Date,
-    private readonly _updatedAt: Date,
+    private _updatedAt: Date,
   ) {}
 
   static open(props: {
@@ -98,6 +99,46 @@ export class Wallet {
 
   get updatedAt(): Date {
     return this._updatedAt;
+  }
+
+  debit(props: { money: Money; at: Date; ledgerId: string; transactionId: string }): WalletLedgerEntry {
+    return this.move(LedgerDirection.Debit, props);
+  }
+
+  credit(props: { money: Money; at: Date; ledgerId: string; transactionId: string }): WalletLedgerEntry {
+    return this.move(LedgerDirection.Credit, props);
+  }
+
+  private move(direction: LedgerDirection, props: { money: Money; at: Date; ledgerId: string; transactionId: string }): WalletLedgerEntry {
+    if (props.money.currency !== this.currency) {
+      throw new CurrencyMismatchError(this.currency, props.money.currency);
+    }
+
+    if (props.money.isZero()) {
+      throw new InvalidWalletInputError("movement amount must be positive");
+    }
+
+    const balanceBefore = this._balance;
+    const balanceAfter = direction === LedgerDirection.Debit ? balanceBefore.subtract(props.money) : balanceBefore.add(props.money);
+
+    if (balanceAfter.isNegative()) {
+      throw new InsufficientBalanceError();
+    }
+
+    this._balance = balanceAfter;
+    this._version += 1;
+    this._updatedAt = props.at;
+
+    return WalletLedgerEntry.create({
+      id: props.ledgerId,
+      walletId: this.id,
+      transactionId: props.transactionId,
+      direction,
+      money: props.money,
+      balanceBefore,
+      balanceAfter,
+      createdAt: props.at,
+    });
   }
 
   toJSON(): { id: string; playerId: string; balance: { amount: string; currency: string }; version: number } {

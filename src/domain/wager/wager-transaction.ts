@@ -29,7 +29,7 @@ export class InvalidTransactionStateError extends Error {
   }
 }
 
-export interface WagerTransactionState {
+export interface CreateWagerTransactionProps {
   id: string;
   providerId: string;
   externalTransactionId: string;
@@ -43,8 +43,13 @@ export interface WagerTransactionState {
   money: Money;
   referenceExternalTransactionId?: string;
   createdAt: Date;
+}
+
+export interface WagerTransactionState extends CreateWagerTransactionProps {
   status: WagerTransactionStatus;
+  failureCode?: string;
   processedAt?: Date;
+  referenceTransactionId?: string;
 }
 
 export class WagerTransaction {
@@ -60,11 +65,13 @@ export class WagerTransaction {
     readonly gameId: string,
     readonly kind: WagerTransactionKind,
     readonly money: Money,
-    readonly referenceExternalTransactionId: string | undefined,
-    readonly createdAt: Date,
-    private _status: WagerTransactionStatus,
-    private _processedAt?: Date,
-  ) {}
+  readonly referenceExternalTransactionId: string | undefined,
+  readonly createdAt: Date,
+  private _status: WagerTransactionStatus,
+  private _failureCode?: string,
+  private _processedAt?: Date,
+  private _referenceTransactionId?: string,
+) {}
 
   static opening(props: {
     id: string;
@@ -95,10 +102,39 @@ export class WagerTransaction {
       undefined,
       props.at,
       WagerTransactionStatus.Pending,
+      undefined,
+      undefined,
+      undefined,
     );
 
     transaction.markProcessed(props.at);
     return transaction;
+  }
+
+  static create(props: CreateWagerTransactionProps): WagerTransaction {
+    if (props.kind === WagerTransactionKind.Opening) {
+      throw new InvalidTransactionStateError("OPENING cannot be submitted");
+    }
+
+    return new WagerTransaction(
+      props.id,
+      props.providerId,
+      props.externalTransactionId,
+      props.idempotencyKey,
+      props.payloadHash,
+      props.walletId,
+      props.playerId,
+      props.roundId,
+      props.gameId,
+      props.kind,
+      props.money,
+      props.referenceExternalTransactionId,
+      props.createdAt,
+      WagerTransactionStatus.Pending,
+      undefined,
+      undefined,
+      undefined,
+    );
   }
 
   static rehydrate(state: WagerTransactionState): WagerTransaction {
@@ -117,7 +153,9 @@ export class WagerTransaction {
       state.referenceExternalTransactionId,
       state.createdAt,
       state.status,
+      state.failureCode,
       state.processedAt,
+      state.referenceTransactionId,
     );
   }
 
@@ -125,14 +163,44 @@ export class WagerTransaction {
     return this._status;
   }
 
+  get failureCode(): string | undefined {
+    return this._failureCode;
+  }
+
   get processedAt(): Date | undefined {
     return this._processedAt;
   }
 
-  markProcessed(at: Date): void {
+  get referenceTransactionId(): string | undefined {
+    return this._referenceTransactionId;
+  }
+
+  matchesPayload(hash: string): boolean {
+    return this.payloadHash === hash;
+  }
+
+  markProcessed(at: Date, referenceTransactionId?: string): void {
     this.assertOpen();
     this._status = WagerTransactionStatus.Processed;
     this._processedAt = at;
+    this._referenceTransactionId = referenceTransactionId;
+  }
+
+  markPendingReference(): void {
+    this.assertOpen();
+    this._status = WagerTransactionStatus.PendingReference;
+  }
+
+  reject(code: string): void {
+    this.assertOpen();
+    this._status = WagerTransactionStatus.Rejected;
+    this._failureCode = code;
+  }
+
+  fail(code: string): void {
+    this.assertOpen();
+    this._status = WagerTransactionStatus.Failed;
+    this._failureCode = code;
   }
 
   private assertOpen(): void {

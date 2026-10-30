@@ -19,6 +19,13 @@ export class WalletAlreadyExistsError extends Error {
   }
 }
 
+export class InsufficientBalanceError extends Error {
+  constructor() {
+    super("insufficient balance");
+    this.name = "InsufficientBalanceError";
+  }
+}
+
 export class WalletNotFoundError extends Error {
   constructor(walletId: string) {
     super(`wallet not found: ${walletId}`);
