@@ -6,7 +6,7 @@ Documento vivo. Cada decisão entra aqui no momento em que é tomada.
 
 Aplicação única em Bun 1.4 e NestJS 12, com TypeScript em `strict`. O processo sobe por `bun src/main.ts`. O runner de teste do desafio é o Bun; Jest fica de fora.
 
-Três pastas separam o código, ainda sem regra de negócio:
+Três pastas separam o código:
 
 - `src/domain` — invariantes, sem Nest e sem ORM
 - `src/application` — casos de uso
@@ -16,7 +16,7 @@ Compose local sobe PostgreSQL 16 e LocalStack só com SQS. A aplicação ainda n
 
 ## ORM e schema
 
-MikroORM 7 fala com o PostgreSQL. A aplicação Nest ainda não abre conexão: a migration roda por `bun run migration:up` e `bun run migration:down`.
+MikroORM 7 fala com o PostgreSQL. A migration roda por `bun run migration:up` e `bun run migration:down`. `POST /wallets` grava a wallet, e quando o saldo inicial é maior que zero também grava a transação `OPENING` e o crédito do ledger, no mesmo `em.transactional()`. O valor monetário entra no SQL como string, com cast `numeric`.
 
 O schema deste passo é SQL explícito, não diff de entity. Ainda não há entity. `snapshot` fica desligado para o ORM não comparar um modelo vazio com o banco e gerar uma migration contrária.
 
@@ -28,6 +28,12 @@ Unicidade já coberta: uma wallet por jogador e moeda, uma transação por prove
 
 Inbox e outbox ainda não têm tabela. Entram com a mensageria.
 
+## Abertura da wallet
+
+`POST /wallets` e `GET /wallets/:id`. Saldo inicial zero não gera lançamento. Saldo maior que zero gera uma `OPENING` interna, já `PROCESSED`, com um `CREDIT` de `0.00` até o saldo inicial. `version` nasce em 1. A mesma carteira por jogador e moeda responde `409`. Payload inválido responde `400`. Carteira ausente responde `404`.
+
+`OPENING` não tem campo na API. O provedor gravado é `internal`, a rodada e o jogo são `opening`, e a idempotency key é `internal:opening:{walletId}`. O `payloadHash` é SHA-256 do JSON canônico (chaves ordenadas) dos campos de negócio. Esse algoritmo vale para a abertura e será o mesmo da idempotência HTTP.
+
 ## Ainda em aberto
 
-Entities do ORM, `POST /wallets` com `OPENING` e ledger na mesma transação, lock da wallet e o mapa de portas.
+`POST /wagering/transactions` para `BET` e `WIN`, lock da wallet, outbox e o restante do mapa HTTP.

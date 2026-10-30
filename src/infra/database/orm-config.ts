@@ -3,9 +3,9 @@ import { defineConfig, MikroORM } from "@mikro-orm/postgresql";
 
 const localDatabaseUrl = "postgres://wagering:wagering@localhost:5432/wagering";
 
-export function createOrmConfig() {
+export function createOrmConfig(clientUrl = process.env.DATABASE_URL ?? localDatabaseUrl) {
   return defineConfig({
-    clientUrl: process.env.DATABASE_URL ?? localDatabaseUrl,
+    clientUrl,
     entities: [],
     discovery: { warnWhenNoEntities: false },
     extensions: [Migrator],
@@ -18,7 +18,7 @@ export function createOrmConfig() {
   });
 }
 
-export function initOrm(): ReturnType<typeof MikroORM.init> {
+export function initOrm(clientUrl?: string): ReturnType<typeof MikroORM.init> {
   // The PostgreSQL init signature collapses to the base driver under strict tsc.
-  return MikroORM.init(createOrmConfig() as Parameters<typeof MikroORM.init>[0]);
+  return MikroORM.init(createOrmConfig(clientUrl) as Parameters<typeof MikroORM.init>[0]);
 }
