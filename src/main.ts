@@ -9,6 +9,7 @@ import { AppModule } from "./app.module";
 import { SqlOutboxStore } from "./infra/database/sql-outbox-store";
 import { WalletExceptionFilter } from "./infra/http/wallet-exception.filter";
 import { SqsWagerConsumer } from "./infra/sqs/sqs-consumer";
+import { writeOperationLog } from "./application/observability/operation-log";
 import { SqsIntegrationEventSink } from "./infra/sqs/sqs-event-sink";
 
 async function bootstrap(): Promise<void> {
@@ -17,8 +18,11 @@ async function bootstrap(): Promise<void> {
   const worker = app.get(PendingReferenceWorker);
   const timer = setInterval(() => {
     void worker.run(new Date()).catch((error: unknown) => {
-      const name = error instanceof Error ? error.name : "Error";
-      console.error(JSON.stringify({ level: "error", message: "pending reference worker failed", error: name }));
+      writeOperationLog({
+        level: "error",
+        message: "pending reference worker failed",
+        error: error instanceof Error ? error.name : "Error",
+      });
     });
   }, 1_000);
   const queueUrl = process.env.SQS_QUEUE_URL;
@@ -43,14 +47,20 @@ async function bootstrap(): Promise<void> {
   const publishing = publisher
     ? setInterval(() => {
       void publisher.publishDue(new Date()).catch((error: unknown) => {
-        const name = error instanceof Error ? error.name : "Error";
-        console.error(JSON.stringify({ level: "error", message: "outbox publisher failed", error: name }));
+        writeOperationLog({
+          level: "error",
+          message: "outbox publisher failed",
+          error: error instanceof Error ? error.name : "Error",
+        });
       });
     }, 1_000)
     : undefined;
   const polling = consumer?.run().catch((error: unknown) => {
-    const name = error instanceof Error ? error.name : "Error";
-    console.error(JSON.stringify({ level: "error", message: "sqs consumer failed", error: name }));
+    writeOperationLog({
+      level: "error",
+      message: "sqs consumer failed",
+      error: error instanceof Error ? error.name : "Error",
+    });
   });
   const stop = () => {
     clearInterval(timer);

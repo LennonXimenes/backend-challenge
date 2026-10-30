@@ -54,9 +54,13 @@ A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OP
 
 O publisher lê a outbox já commitada. O claim é `for update skip locked` de uma pendente com `next_attempt_at` nulo ou vencido. Esse claim chama `scheduleRetry` e confirma a reserva antes de falar com o SQS: 1s, depois 2s, 4s, teto de 60s. Se o processo morre antes do envio, ou depois do envio e antes de gravar `published_at`, outra instância pega a linha quando a reserva vence. A fila é `integration-events.fifo`. O `MessageDeduplicationId` muda a cada envio, então o FIFO não esconde a republicação. O corpo leva o mesmo `eventId`. O consumidor `integration-events` grava a inbox por esse id: a segunda cópia não cria outra linha. Uma linha com `published_at` preenchido não volta para a fila. O payload não muda e delete continua recusado.
 
+## Logs
+
+Cada linha é um JSON. Os campos `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId` entram sempre; o que não existe fica `null`. Na HTTP, `correlationId` vem do header `x-correlation-id` e, sem ele, do id da transação ou da wallet. Na fila, é o `messageId`. O texto da exceção não entra: só o nome do erro. Valor, saldo e corpo do pedido não têm campo. Um id numérico é descartado.
+
 ## Ainda em aberto
 
-Logs, métricas, health e o `README` de entrega.
+Métricas, health e o `README` de entrega.
 
 ## SQS
 

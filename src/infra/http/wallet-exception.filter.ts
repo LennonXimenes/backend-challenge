@@ -1,7 +1,13 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus, Logger } from "@nestjs/common";
+import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus } from "@nestjs/common";
 import { InvalidMoneyError } from "../../domain/money/money-error";
 import { InvalidWalletInputError, WalletAlreadyExistsError, WalletNotFoundError } from "../../domain/wallet/wallet-error";
 import { WagerConflictError } from "../../domain/wager/wager-error";
+import { writeOperationLog } from "../../application/observability/operation-log";
+
+interface RequestLogSource {
+  headers?: Record<string, string | string[] | undefined>;
+  params?: { walletId?: string };
+}
 
 interface JsonResponse {
   status(code: number): { json(body: unknown): void };
@@ -9,10 +15,18 @@ interface JsonResponse {
 
 @Catch()
 export class WalletExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(WalletExceptionFilter.name);
-
   catch(exception: unknown, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<JsonResponse>();
+    const http = host.switchToHttp();
+    const request = http.getRequest<RequestLogSource>();
+    const response = http.getResponse<JsonResponse>();
+    const correlation = request.headers?.["x-correlation-id"];
+    writeOperationLog({
+      level: "error",
+      message: "request failed",
+      correlationId: typeof correlation === "string" ? correlation : null,
+      walletId: request.params?.walletId ?? null,
+      error: exception instanceof Error ? exception.name : "Error",
+    });
 
     if (exception instanceof InvalidMoneyError || exception instanceof InvalidWalletInputError) {
       response.status(HttpStatus.BAD_REQUEST).json({ error: "invalid_payload" });
@@ -34,7 +48,6 @@ export class WalletExceptionFilter implements ExceptionFilter {
       return;
     }
 
-    this.logger.error(exception instanceof Error ? exception.name : "unknown_error");
     response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ error: "internal" });
   }
 }

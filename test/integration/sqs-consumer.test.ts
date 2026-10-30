@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { CreateQueueCommand, DeleteMessageCommand, GetQueueAttributesCommand, ReceiveMessageCommand, SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { Logger, Module } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
@@ -60,6 +60,11 @@ beforeAll(async () => {
   queueUrl = await ensureQueue(queueName);
   dlqUrl = await ensureQueue(dlqName);
 }, 40_000);
+
+beforeEach(async () => {
+  await drain(queueUrl);
+  await drain(dlqUrl);
+});
 
 afterAll(async () => {
   sqs.destroy();
@@ -177,6 +182,25 @@ class HoldingSubmit extends SubmitWager {
     return new Promise((resolve) => {
       this.release = () => resolve({ duplicate: false });
     });
+  }
+}
+
+async function drain(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await sqs.send(new ReceiveMessageCommand({
+      QueueUrl: url,
+      MaxNumberOfMessages: 10,
+      WaitTimeSeconds: 0,
+      VisibilityTimeout: 1,
+    }));
+    for (const message of response.Messages ?? []) {
+      if (message.ReceiptHandle) {
+        await sqs.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: message.ReceiptHandle }));
+      }
+    }
+    if (await queueDepth(url) === 0) {
+      return;
+    }
   }
 }
 

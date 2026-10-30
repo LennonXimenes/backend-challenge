@@ -1,3 +1,4 @@
+import { writeOperationLog } from "../observability/operation-log";
 import type { IntegrationEventSink } from "./integration-event-sink";
 import type { OutboxStore } from "./outbox-store";
 
@@ -21,13 +22,12 @@ export class OutboxPublisher {
         await this.store.markPublished(leased.id, now);
         published += 1;
       } catch (error: unknown) {
-        const name = error instanceof Error ? error.name : "Error";
-        console.error(JSON.stringify({
+        writeOperationLog({
           level: "error",
           message: "outbox publish failed",
-          error: name,
-          eventId: leased.id,
-        }));
+          correlationId: leased.id,
+          error: error instanceof Error ? error.name : "Error",
+        });
       }
     }
   }
