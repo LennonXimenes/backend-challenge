@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Money } from "../../domain/money/money";
 import { WagerTransactionKind, WagerTransactionStatus } from "../../domain/wager/wager-transaction";
-import { WagerRepository } from "./wager-repository";
+import { type InboxClaim, WagerRepository } from "./wager-repository";
 
 export interface SubmitWagerCommand {
   providerId: string;
@@ -29,16 +29,29 @@ export interface SubmitWagerResult {
   body: SubmitWagerBody;
 }
 
+export interface ConsumeResult {
+  duplicate: boolean;
+  result?: SubmitWagerResult;
+}
+
 export class SubmitWager {
   constructor(private readonly wagers: WagerRepository) {}
 
   execute(command: SubmitWagerCommand): Promise<SubmitWagerResult> {
-    return this.wagers.submit({
+    return this.wagers.submit(this.stored(command));
+  }
+
+  executeFromInbox(command: SubmitWagerCommand, inbox: InboxClaim): Promise<ConsumeResult> {
+    return this.wagers.consume(this.stored(command), inbox);
+  }
+
+  private stored(command: SubmitWagerCommand) {
+    return {
       ...command,
       transactionId: randomUUID(),
       ledgerId: randomUUID(),
       at: new Date(),
-    });
+    };
   }
 }
 

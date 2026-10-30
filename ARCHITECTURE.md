@@ -57,3 +57,7 @@ A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OP
 ## Ainda em aberto
 
 O publisher da outbox.
+
+## SQS
+
+A fila `wager-transactions.fifo` entra pelo mesmo `SubmitWager` da HTTP. A inbox `(consumer_name, message_id)` é gravada na mesma transação do saldo, do ledger e da outbox. O `delete` da mensagem só acontece depois que essa transação confirma. A mesma mensagem, com outro id de deduplicação do FIFO, não debita de novo: a garantia é a inbox e a idempotency key. Rejeição de negócio dá ack. Payload inválido, wallet ausente ou conflito de payload vão para `wager-transactions-dlq.fifo`. Erro transitório devolve a mensagem com espera de 1s, 2s, 4s, e na quinta tentativa vai para a DLQ. `SIGTERM` espera o processamento em voo; se ele não termina a tempo, a visibilidade volta a zero.

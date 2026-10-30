@@ -1,5 +1,6 @@
 import { Migrator } from "@mikro-orm/migrations";
 import { defineConfig, MikroORM } from "@mikro-orm/postgresql";
+import { InboxRecordSchema } from "./inbox.record";
 import { LedgerRecordSchema } from "./ledger.record";
 import { OutboxRecordSchema } from "./outbox.record";
 import { WagerRecordSchema } from "./wager.record";
@@ -10,7 +11,7 @@ const localDatabaseUrl = "postgres://wagering:wagering@localhost:5432/wagering";
 export function createOrmConfig(clientUrl = process.env.DATABASE_URL ?? localDatabaseUrl) {
   return defineConfig({
     clientUrl,
-    entities: [WalletRecordSchema, WagerRecordSchema, LedgerRecordSchema, OutboxRecordSchema],
+    entities: [WalletRecordSchema, WagerRecordSchema, LedgerRecordSchema, OutboxRecordSchema, InboxRecordSchema],
     discovery: { warnWhenNoEntities: false },
     extensions: [Migrator],
     migrations: {

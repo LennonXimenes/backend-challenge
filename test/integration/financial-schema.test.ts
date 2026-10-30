@@ -50,10 +50,11 @@ describe("financial schema", () => {
         'wager_transactions_observed_currency_iso',
         'outbox_messages_attempts_non_negative',
         'outbox_messages_event_type_known',
-        'wager_transactions_reference_attempts_non_negative'
+        'wager_transactions_reference_attempts_non_negative',
+        'inbox_messages_pkey'
       )`,
     );
-    expect(new Set(constraints.map((row) => row.conname)).size).toBe(11);
+    expect(new Set(constraints.map((row) => row.conname)).size).toBe(12);
 
     const trigger = await query<{ tgname: string }>(
       `select tgname from pg_trigger where tgname = 'wallet_ledger_entries_no_mutation' and not tgisinternal`,
@@ -197,7 +198,7 @@ describe("financial schema", () => {
       `select table_name
        from information_schema.tables
        where table_schema = 'public'
-         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages')`,
+         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages', 'inbox_messages')`,
     );
     expect(gone).toHaveLength(0);
 
@@ -207,8 +208,8 @@ describe("financial schema", () => {
       `select table_name
        from information_schema.tables
        where table_schema = 'public'
-         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages')`,
+         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages', 'inbox_messages')`,
     );
-    expect(back).toHaveLength(4);
+    expect(back).toHaveLength(5);
   });
 });

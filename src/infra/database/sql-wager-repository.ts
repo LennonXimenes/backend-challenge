@@ -4,15 +4,17 @@ import { MikroORM, type EntityManager } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
 import { outboxForTransaction } from "../../application/integration/outbox-for-transaction";
 import { decideMovement, movementPayloadHash, type MovementInput, type ResolvedReference } from "../../application/wagering/decide-movement";
-import { httpStatusFor, type SubmitWagerResult } from "../../application/wagering/submit-wager";
-import { type StoredWager, WagerRepository } from "../../application/wagering/wager-repository";
+import { httpStatusFor, type ConsumeResult, type SubmitWagerResult } from "../../application/wagering/submit-wager";
+import { type InboxClaim, type StoredWager, WagerRepository } from "../../application/wagering/wager-repository";
 import { Wallet } from "../../domain/wallet/wallet";
 import { WalletNotFoundError } from "../../domain/wallet/wallet-error";
 import { FailureCode } from "../../domain/wager/failure-code";
 import { WagerConflictError } from "../../domain/wager/wager-error";
 import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from "../../domain/wager/wager-transaction";
 import { Money } from "../../domain/money/money";
+import { InboxMessage } from "../../domain/inbox/inbox-message";
 import { constraintText } from "./constraint-error";
+import { inboxRecordFrom, InboxRecord } from "./inbox.record";
 import { ledgerRecordFrom } from "./ledger.record";
 import { normalizeAmount } from "./numeric-string.type";
 import { persistOutbox } from "./outbox.record";
@@ -29,57 +31,10 @@ export class SqlWagerRepository extends WagerRepository {
     const hash = movementPayloadHash(input);
 
     try {
-      return await this.orm.em.fork().transactional(async (em) => {
-        const already = await findByKey(em, input.idempotencyKey);
-        if (already) {
-          return replay(already, hash);
-        }
-
-        const walletRecord = await em.findOne(WalletRecord, { id: input.walletId }, {
-          lockMode: LockMode.PESSIMISTIC_WRITE,
-        });
-        if (!walletRecord) {
-          throw new WalletNotFoundError(input.walletId);
-        }
-
-        const raced = await findByKey(em, input.idempotencyKey);
-        if (raced) {
-          return replay(raced, hash);
-        }
-
-        const reference = input.referenceExternalTransactionId
-          ? await findReference(em, input.providerId, input.referenceExternalTransactionId)
-          : undefined;
-        const reverses = input.kind === WagerTransactionKind.Refund || input.kind === WagerTransactionKind.Rollback;
-        const alreadyReversed = reverses && input.referenceExternalTransactionId
-          ? await hasActiveReversal(em, input.providerId, input.referenceExternalTransactionId, input.kind)
-          : false;
-        const wallet = walletFromRecord(walletRecord);
-        const decision = decideMovement(wallet, { ...input, reference, alreadyReversed });
-        if (decision.transaction.status === WagerTransactionStatus.PendingReference) {
-          decision.transaction.scheduleReferenceRetry(input.at);
-        }
-        const observed = { amount: wallet.balance.toJSON().amount, currency: wallet.currency };
-
-        em.persist(wagerRecordFrom(decision.transaction, observed));
-        await em.flush();
-
-        if (decision.entry) {
-          applyBalance(walletRecord, wallet);
-          em.persist(ledgerRecordFrom(decision.entry));
-        }
-        persistOutbox(em, outboxForTransaction({
-          transaction: decision.transaction,
-          wallet,
-          entry: decision.entry,
-          eventId: randomUUID(),
-          balanceEventId: decision.entry ? randomUUID() : undefined,
-          occurredAt: decision.transaction.processedAt ?? decision.transaction.createdAt,
-        }));
-        await em.flush();
-
-        return resultFrom(decision.transaction, observed, false);
-      }, { clear: true });
+      return await this.orm.em.fork().transactional(
+        (em) => this.applySubmission(em, input),
+        { clear: true },
+      );
     } catch (error) {
       if (error instanceof WagerConflictError || error instanceof WalletNotFoundError) {
         throw error;
@@ -104,6 +59,95 @@ export class SqlWagerRepository extends WagerRepository {
 
       throw error;
     }
+  }
+
+  async consume(input: StoredWager, inbox: InboxClaim, reversalRetry = false): Promise<ConsumeResult> {
+    try {
+      const result = await this.orm.em.fork().transactional(async (em) => {
+        const message = InboxMessage.receive({ ...inbox, receivedAt: input.at });
+        message.markProcessed(input.at);
+        em.persist(inboxRecordFrom(message));
+        await em.flush();
+        return this.applySubmission(em, input);
+      }, { clear: true });
+      return { duplicate: false, result };
+    } catch (error) {
+      const text = constraintText(error);
+      if (text.includes("inbox_messages_pkey")) {
+        const existing = await this.orm.em.fork().findOne(InboxRecord, {
+          consumerName: inbox.consumerName,
+          messageId: inbox.messageId,
+        });
+        if (!existing || existing.payloadHash !== inbox.payloadHash) {
+          throw new WagerConflictError();
+        }
+
+        return { duplicate: true };
+      }
+
+      if (text.includes("wager_transactions_idempotency_key_unique")) {
+        return { duplicate: true, result: await this.replayCommitted(movementPayloadHash(input), input.idempotencyKey) };
+      }
+
+      if (text.includes("wager_transactions_one_reversal_per_reference") && !reversalRetry) {
+        return this.consume(input, inbox, true);
+      }
+
+      throw error;
+    }
+  }
+
+  private async applySubmission(em: EntityManager, input: StoredWager): Promise<SubmitWagerResult> {
+    const hash = movementPayloadHash(input);
+    const already = await findByKey(em, input.idempotencyKey);
+    if (already) {
+      return replay(already, hash);
+    }
+
+    const walletRecord = await em.findOne(WalletRecord, { id: input.walletId }, {
+      lockMode: LockMode.PESSIMISTIC_WRITE,
+    });
+    if (!walletRecord) {
+      throw new WalletNotFoundError(input.walletId);
+    }
+
+    const raced = await findByKey(em, input.idempotencyKey);
+    if (raced) {
+      return replay(raced, hash);
+    }
+
+    const reference = input.referenceExternalTransactionId
+      ? await findReference(em, input.providerId, input.referenceExternalTransactionId)
+      : undefined;
+    const reverses = input.kind === WagerTransactionKind.Refund || input.kind === WagerTransactionKind.Rollback;
+    const alreadyReversed = reverses && input.referenceExternalTransactionId
+      ? await hasActiveReversal(em, input.providerId, input.referenceExternalTransactionId, input.kind)
+      : false;
+    const wallet = walletFromRecord(walletRecord);
+    const decision = decideMovement(wallet, { ...input, reference, alreadyReversed });
+    if (decision.transaction.status === WagerTransactionStatus.PendingReference) {
+      decision.transaction.scheduleReferenceRetry(input.at);
+    }
+    const observed = { amount: wallet.balance.toJSON().amount, currency: wallet.currency };
+
+    em.persist(wagerRecordFrom(decision.transaction, observed));
+    await em.flush();
+
+    if (decision.entry) {
+      applyBalance(walletRecord, wallet);
+      em.persist(ledgerRecordFrom(decision.entry));
+    }
+    persistOutbox(em, outboxForTransaction({
+      transaction: decision.transaction,
+      wallet,
+      entry: decision.entry,
+      eventId: randomUUID(),
+      balanceEventId: decision.entry ? randomUUID() : undefined,
+      occurredAt: decision.transaction.processedAt ?? decision.transaction.createdAt,
+    }));
+    await em.flush();
+
+    return resultFrom(decision.transaction, observed, false);
   }
 
   private async replayCommitted(hash: string, idempotencyKey: string): Promise<SubmitWagerResult> {
