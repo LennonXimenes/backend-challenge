@@ -14,6 +14,7 @@ import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from "
 import { Money } from "../../domain/money/money";
 import { InboxMessage } from "../../domain/inbox/inbox-message";
 import { constraintText } from "./constraint-error";
+import { isLockConflict, recordLockConflict, recordRetry } from "../../application/observability/operation-metrics";
 import { inboxRecordFrom, InboxRecord } from "./inbox.record";
 import { ledgerRecordFrom } from "./ledger.record";
 import { normalizeAmount } from "./numeric-string.type";
@@ -41,6 +42,7 @@ export class SqlWagerRepository extends WagerRepository {
       }
 
       const text = constraintText(error);
+      noteLockConflict(error);
       if (text.includes("wager_transactions_idempotency_key_unique")) {
         return this.replayCommitted(hash, input.idempotencyKey);
       }
@@ -73,6 +75,7 @@ export class SqlWagerRepository extends WagerRepository {
       return { duplicate: false, result };
     } catch (error) {
       const text = constraintText(error);
+      noteLockConflict(error);
       if (text.includes("inbox_messages_pkey")) {
         const existing = await this.orm.em.fork().findOne(InboxRecord, {
           consumerName: inbox.consumerName,
@@ -208,6 +211,7 @@ export class SqlWagerRepository extends WagerRepository {
           stored.scheduleReferenceRetry(now);
           due.referenceAttempts = stored.referenceAttempts;
           due.referenceNextAttemptAt = stored.referenceNextAttemptAt ?? null;
+          recordRetry();
         }
 
         await em.flush();
@@ -351,4 +355,10 @@ function resultFrom(
   }
 
   return { httpStatus: httpStatusFor(transaction.status), body };
+}
+
+function noteLockConflict(error: unknown): void {
+  if (isLockConflict(error)) {
+    recordLockConflict();
+  }
 }

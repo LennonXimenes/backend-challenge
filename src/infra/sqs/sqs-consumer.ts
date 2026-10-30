@@ -9,6 +9,7 @@ import {
 } from "@aws-sdk/client-sqs";
 import { SubmitWager } from "../../application/wagering/submit-wager";
 import { writeOperationLog } from "../../application/observability/operation-log";
+import { recordDlq, recordRetry, recordWager } from "../../application/observability/operation-metrics";
 import { failedDelivery, visibilityDelaySeconds, WAGER_CONSUMER_NAME } from "./delivery";
 import { parseSqsWagerMessage, type SqsWagerMessage } from "./parse-sqs-wager";
 
@@ -77,11 +78,13 @@ export class SqsWagerConsumer {
     let parsed: SqsWagerMessage | undefined;
     try {
       parsed = parseSqsWagerMessage(message.Body ?? "");
+      const started = Date.now();
       const result = await this.submit.executeFromInbox(parsed.command, {
         consumerName: WAGER_CONSUMER_NAME,
         messageId: parsed.messageId,
         payloadHash: parsed.payloadHash,
       });
+      recordWager(result.result?.body.status ?? "", result.duplicate, Date.now() - started);
       writeOperationLog({
         level: "info",
         message: "wager consumed",
@@ -117,6 +120,7 @@ export class SqsWagerConsumer {
           MessageDeduplicationId: `${message.MessageId ?? randomUUID()}-${randomUUID()}`,
         }));
         await this.ack(message.ReceiptHandle ?? "");
+        recordDlq();
         return;
       }
 
@@ -125,6 +129,7 @@ export class SqsWagerConsumer {
         ReceiptHandle: message.ReceiptHandle,
         VisibilityTimeout: visibilityDelaySeconds(receiveCount),
       }));
+      recordRetry();
     }
   }
 

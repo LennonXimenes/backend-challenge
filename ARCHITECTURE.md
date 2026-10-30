@@ -58,9 +58,11 @@ O publisher lê a outbox já commitada. O claim é `for update skip locked` de u
 
 Cada linha é um JSON. Os campos `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId` entram sempre; o que não existe fica `null`. Na HTTP, `correlationId` vem do header `x-correlation-id` e, sem ele, do id da transação ou da wallet. Na fila, é o `messageId`. O texto da exceção não entra: só o nome do erro. Valor, saldo e corpo do pedido não têm campo. Um id numérico é descartado.
 
+Os contadores do processo cobrem transações por status, duplicatas, retries, DLQ, conflitos de lock, atraso da outbox e latência. A latência e o atraso são milissegundos inteiros. Duplicata não conta de novo como transação. Esses números não são a idempotência: ela continua no banco.
+
 ## Ainda em aberto
 
-Métricas, health e o `README` de entrega.
+Health e o `README` de entrega.
 
 ## SQS
 

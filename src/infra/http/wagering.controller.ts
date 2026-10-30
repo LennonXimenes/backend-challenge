@@ -1,5 +1,6 @@
 import { Body, Controller, Headers, Post, Res } from "@nestjs/common";
 import { SubmitWager } from "../../application/wagering/submit-wager";
+import { recordWager } from "../../application/observability/operation-metrics";
 import { writeOperationLog } from "../../application/observability/operation-log";
 import { parseWagerBody } from "./parse-wager";
 
@@ -19,7 +20,9 @@ export class WageringController {
     @Res({ passthrough: true }) response: StatusResponse,
   ) {
     const command = parseWagerBody(body, idempotencyKey);
+    const started = Date.now();
     const result = await this.submitWager.execute(command);
+    recordWager(result.body.status, result.body.idempotentReplay, Date.now() - started);
     writeOperationLog({
       level: "info",
       message: "wager submitted",

@@ -2,6 +2,7 @@ import { LockMode, QueryOrder } from "@mikro-orm/core";
 import { MikroORM } from "@mikro-orm/postgresql";
 import { OutboxMessage } from "../../domain/integration/outbox-message";
 import { type LeasedOutboxEvent, OutboxStore } from "../../application/integration/outbox-store";
+import { recordOutboxLag } from "../../application/observability/operation-metrics";
 import { constraintText } from "./constraint-error";
 import { OutboxRecord } from "./outbox.record";
 
@@ -38,6 +39,7 @@ export class SqlOutboxStore extends OutboxStore {
         publishedAt: record.publishedAt ?? undefined,
       });
       message.scheduleRetry(now);
+      recordOutboxLag(now.getTime() - record.occurredAt.getTime());
       record.attempts = message.attempts;
       record.nextAttemptAt = message.nextAttemptAt ?? null;
       await em.flush();

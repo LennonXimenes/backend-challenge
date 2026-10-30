@@ -1,4 +1,5 @@
 import { writeOperationLog } from "../observability/operation-log";
+import { recordRetry } from "../observability/operation-metrics";
 import type { IntegrationEventSink } from "./integration-event-sink";
 import type { OutboxStore } from "./outbox-store";
 
@@ -28,6 +29,7 @@ export class OutboxPublisher {
           correlationId: leased.id,
           error: error instanceof Error ? error.name : "Error",
         });
+        recordRetry();
       }
     }
   }
