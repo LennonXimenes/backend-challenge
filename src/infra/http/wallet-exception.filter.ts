@@ -1,12 +1,12 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus } from "@nestjs/common";
 import { InvalidMoneyError } from "../../domain/money/money-error";
 import { InvalidWalletInputError, WalletAlreadyExistsError, WalletNotFoundError } from "../../domain/wallet/wallet-error";
-import { WagerConflictError } from "../../domain/wager/wager-error";
+import { TransactionNotFoundError, WagerConflictError } from "../../domain/wager/wager-error";
 import { writeOperationLog } from "../../application/observability/operation-log";
 
 interface RequestLogSource {
   headers?: Record<string, string | string[] | undefined>;
-  params?: { walletId?: string };
+  params?: { walletId?: string; transactionId?: string };
 }
 
 interface JsonResponse {
@@ -25,6 +25,7 @@ export class WalletExceptionFilter implements ExceptionFilter {
       message: "request failed",
       correlationId: typeof correlation === "string" ? correlation : null,
       walletId: request.params?.walletId ?? null,
+      transactionId: request.params?.transactionId ?? null,
       error: exception instanceof Error ? exception.name : "Error",
     });
 
@@ -45,6 +46,11 @@ export class WalletExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof WalletNotFoundError) {
       response.status(HttpStatus.NOT_FOUND).json({ error: "wallet_not_found" });
+      return;
+    }
+
+    if (exception instanceof TransactionNotFoundError) {
+      response.status(HttpStatus.NOT_FOUND).json({ error: "transaction_not_found" });
       return;
     }
 

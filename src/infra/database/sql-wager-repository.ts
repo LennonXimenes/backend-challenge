@@ -5,7 +5,7 @@ import { Injectable } from "@nestjs/common";
 import { outboxForTransaction } from "../../application/integration/outbox-for-transaction";
 import { decideMovement, movementPayloadHash, type MovementInput, type ResolvedReference } from "../../application/wagering/decide-movement";
 import { httpStatusFor, type ConsumeResult, type SubmitWagerResult } from "../../application/wagering/submit-wager";
-import { type InboxClaim, type StoredWager, WagerRepository } from "../../application/wagering/wager-repository";
+import { type InboxClaim, type StoredWager, type WagerLookup, WagerRepository } from "../../application/wagering/wager-repository";
 import { Wallet } from "../../domain/wallet/wallet";
 import { WalletNotFoundError } from "../../domain/wallet/wallet-error";
 import { FailureCode } from "../../domain/wager/failure-code";
@@ -160,6 +160,21 @@ export class SqlWagerRepository extends WagerRepository {
     }
 
     return replay(existing, hash);
+  }
+
+  async findById(transactionId: string): Promise<WagerLookup | undefined> {
+    const record = await this.orm.em.fork().findOne(WagerRecord, { id: transactionId });
+    if (!record) {
+      return undefined;
+    }
+
+    return {
+      transaction: transactionFromRecord(record),
+      balance: {
+        amount: normalizeAmount(record.observedBalance),
+        currency: record.observedCurrency.trim(),
+      },
+    };
   }
 
   async resumeNext(now: Date): Promise<boolean> {

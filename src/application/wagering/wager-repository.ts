@@ -1,5 +1,5 @@
 import type { Money } from "../../domain/money/money";
-import type { WagerTransactionKind } from "../../domain/wager/wager-transaction";
+import type { WagerTransaction, WagerTransactionKind } from "../../domain/wager/wager-transaction";
 import type { ConsumeResult, SubmitWagerResult } from "./submit-wager";
 
 export interface StoredWager {
@@ -24,8 +24,14 @@ export interface InboxClaim {
   payloadHash: string;
 }
 
+export interface WagerLookup {
+  transaction: WagerTransaction;
+  balance: { amount: string; currency: string };
+}
+
 export abstract class WagerRepository {
   abstract submit(input: StoredWager): Promise<SubmitWagerResult>;
   abstract consume(input: StoredWager, inbox: InboxClaim): Promise<ConsumeResult>;
   abstract resumeNext(now: Date): Promise<boolean>;
+  abstract findById(transactionId: string): Promise<WagerLookup | undefined>;
 }

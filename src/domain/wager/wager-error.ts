@@ -4,3 +4,10 @@ export class WagerConflictError extends Error {
     this.name = "WagerConflictError";
   }
 }
+
+export class TransactionNotFoundError extends Error {
+  constructor(transactionId: string) {
+    super(`transaction not found: ${transactionId}`);
+    this.name = "TransactionNotFoundError";
+  }
+}

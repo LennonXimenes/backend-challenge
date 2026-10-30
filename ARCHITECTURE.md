@@ -78,9 +78,11 @@ HTTP: `201` processada, `202` pendente, `422` rejeição, `400` payload, `404` a
 
 `GET /wallets/:walletId/ledger` lê o ledger em ordem de `created_at` e, no empate, `id`. O cursor é o id do último lançamento da página, em base64url. A página seguinte traz só linhas da mesma wallet com `(created_at, id)` maior que essa. O mesmo cursor devolve a mesma página; um lançamento novo aparece depois dela. O limite padrão é 50 e o teto é 100. Cursor ou limite inválido responde `400`. Wallet ausente responde `404`. Valor e saldo saem como string decimal. A rota só lê.
 
+`GET /wagering/transactions/:transactionId` lê a linha já gravada. O `balance` da resposta é o `observed_balance` daquela transação, não o saldo atual da wallet. Valor e saldo saem como string decimal. Id que não é uuid responde `400`. Transação ausente responde `404` com `transaction_not_found`.
+
 Auth não entra nesta entrega. Não há tabela de usuário nem hash de senha. O desenho adiado é um IdP externo, Keycloak, na frente de `POST /wallets` e `POST /wagering/transactions`. O ponto de extensão é `ProviderIdentityPort`: `UnconfiguredIdentity` recusa o token até o IdP existir, e `OpenAccessGuard` hoje libera o acesso. Esse guard não está registrado. `GET /health/live` e `GET /health/ready` continuam abertos. A fila é canal interno. O `providerId` e o `playerId` da mensagem passam pela mesma regra do domínio: jogador diferente da wallet fica `REJECTED` com `PLAYER_MISMATCH`, sem lançamento.
 
-Limites conhecidos: ainda não há consulta da transação nem reconciliação. As métricas morrem com o processo e não se somam entre instâncias. A corrida do saldo prova o Postgres; ela não atravessa a fila. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
+Limites conhecidos: ainda não há consulta por id externo do provedor nem reconciliação. As métricas morrem com o processo e não se somam entre instâncias. A corrida do saldo prova o Postgres; ela não atravessa a fila. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
 
 ## SQS
 
