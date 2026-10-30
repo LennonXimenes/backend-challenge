@@ -60,9 +60,11 @@ Cada linha é um JSON. Os campos `correlationId`, `messageId`, `transactionId`, 
 
 Os contadores do processo cobrem transações por status, duplicatas, retries, DLQ, conflitos de lock, atraso da outbox e latência. A latência e o atraso são milissegundos inteiros. Duplicata não conta de novo como transação. Esses números não são a idempotência: ela continua no banco.
 
+`GET /health/live` responde `200` sem autenticação, só para dizer que o processo atende. `GET /health/ready` exige o Postgres (`select 1`) e a fila configurada em `SQS_QUEUE_URL`. Os dois precisam responder. Se um falha, a resposta é `503` com `postgres` e `sqs` em booleano, sem URL e sem saldo.
+
 ## Ainda em aberto
 
-Health e o `README` de entrega.
+O `README` de entrega.
 
 ## SQS
 
