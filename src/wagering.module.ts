@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { PendingReferenceWorker } from "./application/wagering/pending-reference-worker";
 import { SubmitWager } from "./application/wagering/submit-wager";
 import { WagerRepository } from "./application/wagering/wager-repository";
 import { SqlWagerRepository } from "./infra/database/sql-wager-repository";
@@ -7,6 +8,7 @@ import { WageringController } from "./infra/http/wagering.controller";
 @Module({
   controllers: [WageringController],
   providers: [
+    PendingReferenceWorker,
     {
       provide: SubmitWager,
       useFactory: (wagers: WagerRepository) => new SubmitWager(wagers),

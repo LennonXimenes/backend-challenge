@@ -49,10 +49,11 @@ describe("financial schema", () => {
         'wager_transactions_observed_balance_non_negative',
         'wager_transactions_observed_currency_iso',
         'outbox_messages_attempts_non_negative',
-        'outbox_messages_event_type_known'
+        'outbox_messages_event_type_known',
+        'wager_transactions_reference_attempts_non_negative'
       )`,
     );
-    expect(new Set(constraints.map((row) => row.conname)).size).toBe(10);
+    expect(new Set(constraints.map((row) => row.conname)).size).toBe(11);
 
     const trigger = await query<{ tgname: string }>(
       `select tgname from pg_trigger where tgname = 'wallet_ledger_entries_no_mutation' and not tgisinternal`,
@@ -63,6 +64,11 @@ describe("financial schema", () => {
       `select indexname from pg_indexes where indexname = 'outbox_messages_pending_due'`,
     );
     expect(outboxIndex).toHaveLength(1);
+
+    const pendingIndex = await query<{ indexname: string }>(
+      `select indexname from pg_indexes where indexname = 'wager_transactions_pending_reference_due'`,
+    );
+    expect(pendingIndex).toHaveLength(1);
   });
 
   test("rejects a duplicate wallet, a negative balance and a second ledger entry", async () => {

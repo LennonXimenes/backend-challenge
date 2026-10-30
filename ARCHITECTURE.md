@@ -40,7 +40,7 @@ A outbox grava o envelope do evento em `jsonb`. O valor monetário dentro de `da
 
 Dentro de `em.transactional()`, a wallet é lida com `LockMode.PESSIMISTIC_WRITE`, que vira `select ... for update` daquela linha. Não há lock global. Uma transação que segura a linha de uma wallet não impede o débito de outra. A coluna `version` sobe só quando o saldo muda. Ela não é o optimistic lock do MikroORM: esse modo incrementaria a versão em qualquer flush. Duas `BET` de `80.00` sobre saldo `100.00` deixam uma `PROCESSED`, uma `REJECTED` com `INSUFFICIENT_BALANCE`, saldo `20.00` e um débito. A mesma aposta 50 vezes em paralelo deixa um débito. O mesmo resultado vale com três processos do `bun src/main.ts`, cada um com o seu `PORT` e o mesmo PostgreSQL. O replay dessas respostas não grava de novo.
 
-`BET` debita e gera um `DEBIT`. `WIN` credita e gera um `CREDIT`. Saldo insuficiente, moeda diferente, jogador diferente ou referência inválida gravam a transação como `REJECTED`, sem lançamento e sem mexer no saldo. `WIN` com referência que ainda não existe fica `PENDING_REFERENCE`, também sem lançamento. O worker que reprocessa essa fila ainda não existe.
+`BET` debita e gera um `DEBIT`. `WIN` credita e gera um `CREDIT`. Saldo insuficiente, moeda diferente, jogador diferente ou referência inválida gravam a transação como `REJECTED`, sem lançamento e sem mexer no saldo. `WIN` com referência que ainda não existe fica `PENDING_REFERENCE`, também sem lançamento. O worker de `PENDING_REFERENCE` roda a cada 1s no processo. A primeira espera é de 1s, depois 2s, 4s, 8s e 16s. Na quinta tentativa sem a referência, a transação fica `REJECTED` com `REFERENCE_NOT_FOUND` e grava `WagerTransactionRejected`. Fora de ordem costuma durar segundos; 31s cobre essa reordenação e uma indisponibilidade curta. O agendamento fica em `reference_attempts` e `reference_next_attempt_at`. O claim usa `for update skip locked` da linha pendente e, em seguida, o lock da wallet. Duas instâncias não pegam a mesma linha. Enquanto espera, o replay continua `202`. Quando resolve, o replay devolve o resultado final e o saldo daquele momento.
 
 Cada transação grava `observed_balance` e `observed_currency`: o saldo da wallet depois da decisão. `matchesPayload` compara o hash recebido com o gravado. A mesma key e o mesmo hash devolvem essa resposta original, com `idempotentReplay: true` e o status HTTP de origem, mesmo que a wallet já tenha mudado. A mesma key com outro hash responde `409` (`transaction_conflict`) e não gera lançamento. Não é `failureCode` de negócio. Se duas requisições da mesma key passam juntas, a unique da key desfaz a segunda transação e a leitura seguinte decide entre replay e conflito. O mesmo id externo com outra key também é `409`.
 
@@ -56,4 +56,4 @@ A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OP
 
 ## Ainda em aberto
 
-O publisher da outbox e o worker de `PENDING_REFERENCE`.
+O publisher da outbox.

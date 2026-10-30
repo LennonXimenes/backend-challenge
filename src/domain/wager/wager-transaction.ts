@@ -22,6 +22,10 @@ export enum WagerTransactionStatus {
   Failed = "FAILED",
 }
 
+export const REFERENCE_ATTEMPT_LIMIT = 5;
+const REFERENCE_RETRY_BASE_MS = 1_000;
+const REFERENCE_RETRY_CAP_MS = 60_000;
+
 export class InvalidTransactionStateError extends Error {
   constructor(message: string) {
     super(message);
@@ -50,6 +54,8 @@ export interface WagerTransactionState extends CreateWagerTransactionProps {
   failureCode?: string;
   processedAt?: Date;
   referenceTransactionId?: string;
+  referenceAttempts?: number;
+  referenceNextAttemptAt?: Date;
 }
 
 export class WagerTransaction {
@@ -71,6 +77,8 @@ export class WagerTransaction {
   private _failureCode?: string,
   private _processedAt?: Date,
   private _referenceTransactionId?: string,
+  private _referenceAttempts = 0,
+  private _referenceNextAttemptAt?: Date,
 ) {}
 
   static opening(props: {
@@ -156,6 +164,8 @@ export class WagerTransaction {
       state.failureCode,
       state.processedAt,
       state.referenceTransactionId,
+      state.referenceAttempts ?? 0,
+      state.referenceNextAttemptAt,
     );
   }
 
@@ -173,6 +183,28 @@ export class WagerTransaction {
 
   get referenceTransactionId(): string | undefined {
     return this._referenceTransactionId;
+  }
+
+  get referenceAttempts(): number {
+    return this._referenceAttempts;
+  }
+
+  get referenceNextAttemptAt(): Date | undefined {
+    return this._referenceNextAttemptAt;
+  }
+
+  referenceAttemptsExhausted(): boolean {
+    return this._referenceAttempts >= REFERENCE_ATTEMPT_LIMIT;
+  }
+
+  scheduleReferenceRetry(now: Date): void {
+    if (this._status !== WagerTransactionStatus.PendingReference) {
+      throw new InvalidTransactionStateError("reference retry requires PENDING_REFERENCE");
+    }
+
+    const delay = Math.min(REFERENCE_RETRY_BASE_MS * 2 ** this._referenceAttempts, REFERENCE_RETRY_CAP_MS);
+    this._referenceNextAttemptAt = new Date(now.getTime() + delay);
+    this._referenceAttempts += 1;
   }
 
   matchesPayload(hash: string): boolean {

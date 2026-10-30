@@ -24,6 +24,8 @@ export class WagerRecord {
   processedAt!: Date | null;
   observedBalance!: string;
   observedCurrency!: string;
+  referenceAttempts!: number;
+  referenceNextAttemptAt!: Date | null;
 }
 
 export const WagerRecordSchema = defineEntity({
@@ -50,6 +52,8 @@ export const WagerRecordSchema = defineEntity({
     processedAt: p.datetime().nullable().columnType("timestamptz").fieldName("processed_at"),
     observedBalance: p.type(NumericStringType).runtimeType("string").fieldName("observed_balance"),
     observedCurrency: p.string().length(3).columnType("char(3)").fieldName("observed_currency"),
+    referenceAttempts: p.integer().fieldName("reference_attempts").default(0),
+    referenceNextAttemptAt: p.datetime().nullable().columnType("timestamptz").fieldName("reference_next_attempt_at"),
   },
 });
 
@@ -78,6 +82,8 @@ export function wagerRecordFrom(
   record.processedAt = transaction.processedAt ?? null;
   record.observedBalance = observed.amount;
   record.observedCurrency = observed.currency;
+  record.referenceAttempts = transaction.referenceAttempts;
+  record.referenceNextAttemptAt = transaction.referenceNextAttemptAt ?? null;
   return record;
 }
 
@@ -101,5 +107,7 @@ export function transactionFromRecord(record: WagerRecord): WagerTransaction {
     failureCode: record.failureCode ?? undefined,
     processedAt: record.processedAt ? new Date(record.processedAt) : undefined,
     referenceTransactionId: record.referenceTransactionId ?? undefined,
+    referenceAttempts: record.referenceAttempts,
+    referenceNextAttemptAt: record.referenceNextAttemptAt ? new Date(record.referenceNextAttemptAt) : undefined,
   });
 }

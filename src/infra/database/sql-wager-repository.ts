@@ -3,13 +3,15 @@ import { LockMode } from "@mikro-orm/core";
 import { MikroORM, type EntityManager } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
 import { outboxForTransaction } from "../../application/integration/outbox-for-transaction";
-import { decideMovement, movementPayloadHash, type ResolvedReference } from "../../application/wagering/decide-movement";
+import { decideMovement, movementPayloadHash, type MovementInput, type ResolvedReference } from "../../application/wagering/decide-movement";
 import { httpStatusFor, type SubmitWagerResult } from "../../application/wagering/submit-wager";
 import { type StoredWager, WagerRepository } from "../../application/wagering/wager-repository";
 import { Wallet } from "../../domain/wallet/wallet";
 import { WalletNotFoundError } from "../../domain/wallet/wallet-error";
+import { FailureCode } from "../../domain/wager/failure-code";
 import { WagerConflictError } from "../../domain/wager/wager-error";
 import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from "../../domain/wager/wager-transaction";
+import { Money } from "../../domain/money/money";
 import { constraintText } from "./constraint-error";
 import { ledgerRecordFrom } from "./ledger.record";
 import { normalizeAmount } from "./numeric-string.type";
@@ -54,6 +56,9 @@ export class SqlWagerRepository extends WagerRepository {
           : false;
         const wallet = walletFromRecord(walletRecord);
         const decision = decideMovement(wallet, { ...input, reference, alreadyReversed });
+        if (decision.transaction.status === WagerTransactionStatus.PendingReference) {
+          decision.transaction.scheduleReferenceRetry(input.at);
+        }
         const observed = { amount: wallet.balance.toJSON().amount, currency: wallet.currency };
 
         em.persist(wagerRecordFrom(decision.transaction, observed));
@@ -109,6 +114,79 @@ export class SqlWagerRepository extends WagerRepository {
 
     return replay(existing, hash);
   }
+
+  async resumeNext(now: Date): Promise<boolean> {
+    return this.orm.em.fork().transactional(async (em) => {
+      const [due] = await em.find(WagerRecord, {
+        status: WagerTransactionStatus.PendingReference,
+        $or: [
+          { referenceNextAttemptAt: null },
+          { referenceNextAttemptAt: { $lte: now } },
+        ],
+      }, {
+        limit: 1,
+        lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
+        orderBy: { referenceNextAttemptAt: "asc" },
+      });
+      if (!due) {
+        return false;
+      }
+
+      const walletRecord = await em.findOne(WalletRecord, { id: due.walletId }, {
+        lockMode: LockMode.PESSIMISTIC_WRITE,
+      });
+      if (!walletRecord) {
+        throw new WalletNotFoundError(due.walletId);
+      }
+
+      const stored = transactionFromRecord(due);
+      const wallet = walletFromRecord(walletRecord);
+      const reference = stored.referenceExternalTransactionId
+        ? await findReference(em, stored.providerId, stored.referenceExternalTransactionId)
+        : undefined;
+      const reverses = stored.kind === WagerTransactionKind.Refund || stored.kind === WagerTransactionKind.Rollback;
+      const alreadyReversed = reverses && stored.referenceExternalTransactionId
+        ? await hasActiveReversal(em, stored.providerId, stored.referenceExternalTransactionId, stored.kind, stored.id)
+        : false;
+      const decision = decideMovement(wallet, movementFrom(stored, reference, alreadyReversed, now));
+
+      if (decision.transaction.status === WagerTransactionStatus.PendingReference) {
+        if (stored.referenceAttemptsExhausted()) {
+          stored.reject(FailureCode.ReferenceNotFound);
+          assignOutcome(due, stored, wallet);
+          persistOutbox(em, outboxForTransaction({
+            transaction: stored,
+            wallet,
+            eventId: randomUUID(),
+            occurredAt: now,
+          }));
+        } else {
+          stored.scheduleReferenceRetry(now);
+          due.referenceAttempts = stored.referenceAttempts;
+          due.referenceNextAttemptAt = stored.referenceNextAttemptAt ?? null;
+        }
+
+        await em.flush();
+        return true;
+      }
+
+      assignOutcome(due, decision.transaction, wallet);
+      if (decision.entry) {
+        applyBalance(walletRecord, wallet);
+        em.persist(ledgerRecordFrom(decision.entry));
+      }
+      persistOutbox(em, outboxForTransaction({
+        transaction: decision.transaction,
+        wallet,
+        entry: decision.entry,
+        eventId: randomUUID(),
+        balanceEventId: decision.entry ? randomUUID() : undefined,
+        occurredAt: now,
+      }));
+      await em.flush();
+      return true;
+    }, { clear: true });
+  }
 }
 
 function applyBalance(record: WalletRecord, wallet: Wallet): void {
@@ -148,11 +226,13 @@ async function hasActiveReversal(
   providerId: string,
   referenceExternalTransactionId: string,
   kind: string,
+  exceptId?: string,
 ): Promise<boolean> {
   const active = await em.findOne(WagerRecord, {
     providerId,
     referenceExternalTransactionId,
     kind,
+    ...(exceptId ? { id: { $ne: exceptId } } : {}),
     status: {
       $in: [
         WagerTransactionStatus.Pending,
@@ -162,6 +242,41 @@ async function hasActiveReversal(
     },
   });
   return active !== null;
+}
+
+function movementFrom(
+  stored: WagerTransaction,
+  reference: ResolvedReference | undefined,
+  alreadyReversed: boolean,
+  at: Date,
+): MovementInput {
+  return {
+    transactionId: stored.id,
+    ledgerId: randomUUID(),
+    providerId: stored.providerId,
+    externalTransactionId: stored.externalTransactionId,
+    idempotencyKey: stored.idempotencyKey,
+    playerId: stored.playerId,
+    walletId: stored.walletId,
+    roundId: stored.roundId,
+    gameId: stored.gameId,
+    kind: stored.kind as MovementInput["kind"],
+    money: Money.from(stored.money.toJSON()),
+    referenceExternalTransactionId: stored.referenceExternalTransactionId,
+    reference,
+    alreadyReversed,
+    at,
+  };
+}
+
+function assignOutcome(record: WagerRecord, transaction: WagerTransaction, wallet: Wallet): void {
+  record.status = transaction.status;
+  record.failureCode = transaction.failureCode ?? null;
+  record.processedAt = transaction.processedAt ?? null;
+  record.referenceTransactionId = transaction.referenceTransactionId ?? null;
+  record.referenceNextAttemptAt = null;
+  record.observedBalance = wallet.balance.toJSON().amount;
+  record.observedCurrency = wallet.currency;
 }
 
 function replay(record: WagerRecord, hash: string): SubmitWagerResult {

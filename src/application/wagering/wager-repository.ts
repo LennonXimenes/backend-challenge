@@ -20,4 +20,5 @@ export interface StoredWager {
 
 export abstract class WagerRepository {
   abstract submit(input: StoredWager): Promise<SubmitWagerResult>;
+  abstract resumeNext(now: Date): Promise<boolean>;
 }
