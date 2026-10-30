@@ -12,7 +12,7 @@ Três pastas separam o código:
 - `src/application` — casos de uso
 - `src/infra` — banco, fila e HTTP
 
-Compose local sobe PostgreSQL 16 e LocalStack só com SQS. A aplicação fala com o PostgreSQL. O SQS ainda não está ligado.
+Compose local sobe PostgreSQL 16 e LocalStack só com SQS. A aplicação fala com o PostgreSQL. O consumer da fila de apostas e o publisher da outbox sobem quando as URLs das filas estão definidas.
 
 ## ORM e schema
 
@@ -26,7 +26,7 @@ Dinheiro persiste em `numeric(19, 2)`. Não há coluna `float` nem `double preci
 
 Unicidade já coberta: uma wallet por jogador e moeda, uma transação por provedor e id externo, uma idempotency key, um lançamento por wallet e transação, e uma reversão viva (`PENDING`, `PENDING_REFERENCE` ou `PROCESSED`) por referência e tipo.
 
-A outbox grava o envelope do evento em `jsonb`. O valor monetário dentro de `data` é `MoneyProps` (string), nunca a classe `Money`. Inbox ainda não tem tabela.
+A outbox grava o envelope do evento em `jsonb`. O valor monetário dentro de `data` é `MoneyProps` (string), nunca a classe `Money`. A inbox deduplica por `(consumer_name, message_id)`.
 
 ## Abertura da wallet
 
@@ -50,13 +50,13 @@ HTTP deste passo: `201` processada, `202` referência pendente, `422` rejeição
 
 `WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged` e `WagerTransactionPendingReference` são subclasses de `IntegrationEvent`. O `eventType` e a `version` ficam na classe. `correlationId` deste passo é o id da transação. O agregado da transação é o id dela. O de `WalletBalanceChanged` é o id da wallet.
 
-A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OPENING` com saldo entra com os dois eventos. Saldo inicial zero não gera evento. `REJECTED` e `PENDING_REFERENCE` não geram `WalletBalanceChanged`. Replay não grava de novo. Nada é publicado dentro dessa transação: `published_at` nasce nulo. O publisher ainda não existe.
+A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OPENING` com saldo entra com os dois eventos. Saldo inicial zero não gera evento. `REJECTED` e `PENDING_REFERENCE` não geram `WalletBalanceChanged`. Replay não grava de novo. Nada é publicado dentro dessa transação: `published_at` nasce nulo. Uma linha ainda não commitada não aparece para o publisher.
 
-`scheduleRetry` espera 1s, depois 2s, 4s, com teto de 60s. O índice `outbox_messages_pending_due` deixa as pendentes com `next_attempt_at` nulo na frente. O payload não muda e a linha publicada não volta atrás. Delete é recusado.
+O publisher lê a outbox já commitada. O claim é `for update skip locked` de uma pendente com `next_attempt_at` nulo ou vencido. Esse claim chama `scheduleRetry` e confirma a reserva antes de falar com o SQS: 1s, depois 2s, 4s, teto de 60s. Se o processo morre antes do envio, ou depois do envio e antes de gravar `published_at`, outra instância pega a linha quando a reserva vence. A fila é `integration-events.fifo`. O `MessageDeduplicationId` muda a cada envio, então o FIFO não esconde a republicação. O corpo leva o mesmo `eventId`. O consumidor `integration-events` grava a inbox por esse id: a segunda cópia não cria outra linha. Uma linha com `published_at` preenchido não volta para a fila. O payload não muda e delete continua recusado.
 
 ## Ainda em aberto
 
-O publisher da outbox.
+Logs, métricas, health e o `README` de entrega.
 
 ## SQS
 
