@@ -3,4 +3,6 @@ export const FailureCode = {
   CurrencyMismatch: "CURRENCY_MISMATCH",
   InvalidReference: "INVALID_REFERENCE",
   PlayerMismatch: "PLAYER_MISMATCH",
+  AmountMismatch: "AMOUNT_MISMATCH",
+  AlreadyReversed: "ALREADY_REVERSED",
 } as const;

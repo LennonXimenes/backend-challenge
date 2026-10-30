@@ -34,9 +34,10 @@ export function parseWagerBody(body: unknown, idempotencyKey: string | undefined
   if (
     record.kind !== WagerTransactionKind.Bet &&
     record.kind !== WagerTransactionKind.Win &&
-    record.kind !== WagerTransactionKind.Loss
+    record.kind !== WagerTransactionKind.Loss &&
+    record.kind !== WagerTransactionKind.Refund
   ) {
-    throw new InvalidWalletInputError("kind must be BET, WIN or LOSS");
+    throw new InvalidWalletInputError("kind must be BET, WIN, LOSS or REFUND");
   }
 
   const reference = record.referenceExternalTransactionId;
@@ -46,6 +47,10 @@ export function parseWagerBody(body: unknown, idempotencyKey: string | undefined
 
   if (record.kind === WagerTransactionKind.Bet && reference) {
     throw new InvalidWalletInputError("BET does not accept a reference");
+  }
+
+  if (record.kind === WagerTransactionKind.Refund && (typeof reference !== "string" || reference === "")) {
+    throw new InvalidWalletInputError("REFUND requires referenceExternalTransactionId");
   }
 
   const parsedMoney = Money.from({ amount, currency });

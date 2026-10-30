@@ -36,7 +36,7 @@ A outbox grava o envelope do evento em `jsonb`. O valor monetário dentro de `da
 
 ## Aposta e ganho
 
-`POST /wagering/transactions` aceita `BET`, `WIN` e `LOSS`. `LOSS` fica `PROCESSED`, grava `WagerTransactionProcessed` e não gera `WalletBalanceChanged`. O saldo e a `version` ficam parados. Se a `LOSS` cita uma aposta que ainda não existe, fica `PENDING_REFERENCE`, também sem lançamento. O header `Idempotency-Key` é obrigatório. O servidor não inventa a key. Os testes enviam `{providerId}:{externalTransactionId}`.
+`POST /wagering/transactions` aceita `BET`, `WIN`, `LOSS` e `REFUND`. `LOSS` fica `PROCESSED`, grava `WagerTransactionProcessed` e não gera `WalletBalanceChanged`. O saldo e a `version` ficam parados. Se a `LOSS` cita uma aposta que ainda não existe, fica `PENDING_REFERENCE`, também sem lançamento. `REFUND` exige `referenceExternalTransactionId`; sem o campo a resposta é `400`. A referência é a `BET` `PROCESSED` do mesmo provedor, jogador, wallet, moeda e rodada, resolvida por `(providerId, referenceExternalTransactionId)`. O valor tem de ser igual. O crédito é um `CREDIT`. Uma segunda reversão da mesma aposta fica `REJECTED` com `ALREADY_REVERSED`. Valor diferente fica `AMOUNT_MISMATCH`. Referência ainda ausente fica `PENDING_REFERENCE`, sem crédito. O índice `wager_transactions_one_reversal_per_reference` impede duas reversões ativas. Duas `REFUND` da mesma aposta em paralelo deixam um crédito. `REFUND` credita, então não produz saldo negativo. O header `Idempotency-Key` é obrigatório. O servidor não inventa a key. Os testes enviam `{providerId}:{externalTransactionId}`.
 
 Dentro de `em.transactional()`, a wallet é lida com `LockMode.PESSIMISTIC_WRITE`, que vira `select ... for update` daquela linha. Não há lock global. Uma transação que segura a linha de uma wallet não impede o débito de outra. A coluna `version` sobe só quando o saldo muda. Ela não é o optimistic lock do MikroORM: esse modo incrementaria a versão em qualquer flush. Duas `BET` de `80.00` sobre saldo `100.00` deixam uma `PROCESSED`, uma `REJECTED` com `INSUFFICIENT_BALANCE`, saldo `20.00` e um débito. A mesma aposta 50 vezes em paralelo deixa um débito. O mesmo resultado vale com três processos do `bun src/main.ts`, cada um com o seu `PORT` e o mesmo PostgreSQL. O replay dessas respostas não grava de novo.
 
@@ -56,4 +56,4 @@ A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OP
 
 ## Ainda em aberto
 
-`REFUND`, `ROLLBACK`, o publisher da outbox e o worker de `PENDING_REFERENCE`. A corrida de `REFUND` espera a operação existir.
+`ROLLBACK`, o publisher da outbox e o worker de `PENDING_REFERENCE`. A reversão que debitaria além do saldo fica para o `ROLLBACK`, com um `failureCode` diferente de `INSUFFICIENT_BALANCE`.

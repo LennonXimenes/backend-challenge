@@ -381,6 +381,141 @@ describe("POST /wagering/transactions", () => {
     expect(await eventTypes(loss.body.transactionId as string)).toEqual(["WagerTransactionProcessed"]);
   });
 
+  test("a refund credits the bet once, and a second refund does not", async () => {
+    const playerId = randomUUID();
+    const opened = await postJson("/wallets", {
+      playerId,
+      initialBalance: { amount: "100.00", currency: "BRL" },
+    });
+    const walletId = opened.body.id as string;
+    const betExternalId = randomUUID();
+    const bet = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: betExternalId,
+      playerId,
+      walletId,
+      roundId: "round-refund",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "40.00", currency: "BRL" },
+    });
+    expect(bet.status).toBe(201);
+
+    const mismatch = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-refund",
+      gameId: "fortune-chimp",
+      kind: "REFUND",
+      money: { amount: "10.00", currency: "BRL" },
+      referenceExternalTransactionId: betExternalId,
+    });
+    expect(mismatch.status).toBe(422);
+    expect(mismatch.body).toMatchObject({
+      status: "REJECTED",
+      failureCode: "AMOUNT_MISMATCH",
+      balance: { amount: "60.00", currency: "BRL" },
+    });
+
+    const early = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-refund",
+      gameId: "fortune-chimp",
+      kind: "REFUND",
+      money: { amount: "40.00", currency: "BRL" },
+      referenceExternalTransactionId: "bet-not-here",
+    });
+    expect(early.status).toBe(202);
+    expect(early.body).toMatchObject({
+      status: "PENDING_REFERENCE",
+      balance: { amount: "60.00", currency: "BRL" },
+    });
+    expect(await eventTypes(early.body.transactionId as string)).toEqual(["WagerTransactionPendingReference"]);
+
+    const refund = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-refund",
+      gameId: "fortune-chimp",
+      kind: "REFUND",
+      money: { amount: "40.00", currency: "BRL" },
+      referenceExternalTransactionId: betExternalId,
+    });
+    expect(refund.status).toBe(201);
+    expect(refund.body).toMatchObject({
+      status: "PROCESSED",
+      balance: { amount: "100.00", currency: "BRL" },
+      idempotentReplay: false,
+    });
+    expect(await eventTypes(refund.body.transactionId as string)).toEqual([
+      "WagerTransactionProcessed",
+      "WalletBalanceChanged",
+    ]);
+
+    const replay = await postWager(refund.request);
+    expect(replay.body).toMatchObject({
+      transactionId: refund.body.transactionId,
+      balance: { amount: "100.00", currency: "BRL" },
+      idempotentReplay: true,
+    });
+
+    const again = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-refund",
+      gameId: "fortune-chimp",
+      kind: "REFUND",
+      money: { amount: "40.00", currency: "BRL" },
+      referenceExternalTransactionId: betExternalId,
+    });
+    expect(again.status).toBe(422);
+    expect(again.body).toMatchObject({
+      status: "REJECTED",
+      failureCode: "ALREADY_REVERSED",
+      balance: { amount: "100.00", currency: "BRL" },
+    });
+
+    const missingReference = await fetch(`${baseUrl}/wagering/transactions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "provider-a:refund-without-reference",
+      },
+      body: JSON.stringify({
+        providerId: "provider-a",
+        externalTransactionId: "refund-without-reference",
+        playerId,
+        walletId,
+        roundId: "round-refund",
+        gameId: "fortune-chimp",
+        kind: "REFUND",
+        money: { amount: "40.00", currency: "BRL" },
+      }),
+    });
+    expect(missingReference.status).toBe(400);
+
+    const wallet = await (await fetch(`${baseUrl}/wallets/${walletId}`)).json() as { version: number; balance: { amount: string } };
+    expect(wallet.balance.amount).toBe("100.00");
+    expect(wallet.version).toBe(3);
+    const ledger = await orm.em.getConnection().execute<Array<{ credits: string; debits: string }>>(
+      `select count(*) filter (where direction = 'CREDIT')::text as credits,
+              count(*) filter (where direction = 'DEBIT')::text as debits
+       from wallet_ledger_entries
+       where wallet_id = ?::uuid`,
+      [walletId],
+    );
+    expect(ledger[0]).toEqual({ credits: "2", debits: "1" });
+  });
+
   test("a missing idempotency key is a bad request", async () => {
     const response = await fetch(`${baseUrl}/wagering/transactions`, {
       method: "POST",

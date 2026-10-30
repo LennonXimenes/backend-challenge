@@ -1,10 +1,11 @@
+import { Money } from "../../domain/money/money";
 import { CurrencyMismatchError } from "../../domain/money/money-error";
 import { InsufficientBalanceError } from "../../domain/wallet/wallet-error";
 import { Wallet } from "../../domain/wallet/wallet";
 import { WalletLedgerEntry } from "../../domain/wallet/wallet-ledger-entry";
 import { FailureCode } from "../../domain/wager/failure-code";
 import { payloadHash } from "../../domain/wager/payload-hash";
-import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from "../../domain/wager/wager-transaction";
+import { InvalidTransactionStateError, WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from "../../domain/wager/wager-transaction";
 
 export interface ResolvedReference {
   id: string;
@@ -14,6 +15,7 @@ export interface ResolvedReference {
   walletId: string;
   roundId: string;
   currency: string;
+  amount: string;
 }
 
 export interface MovementInput {
@@ -26,10 +28,11 @@ export interface MovementInput {
   walletId: string;
   roundId: string;
   gameId: string;
-  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss;
+  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss | WagerTransactionKind.Refund;
   money: Wallet["balance"];
   referenceExternalTransactionId?: string;
   reference?: ResolvedReference;
+  alreadyReversed?: boolean;
   at: Date;
 }
 
@@ -85,6 +88,10 @@ export function decideMovement(wallet: Wallet, input: MovementInput): MovementDe
     return { transaction };
   }
 
+  if (input.kind === WagerTransactionKind.Refund) {
+    return decideRefund(wallet, transaction, input);
+  }
+
   if (input.kind === WagerTransactionKind.Loss && input.money.currency !== wallet.currency) {
     transaction.reject(FailureCode.CurrencyMismatch);
     return { transaction };
@@ -125,6 +132,46 @@ export function decideMovement(wallet: Wallet, input: MovementInput): MovementDe
 
     throw error;
   }
+}
+
+function decideRefund(wallet: Wallet, transaction: WagerTransaction, input: MovementInput): MovementDecision {
+  if (!input.referenceExternalTransactionId) {
+    throw new InvalidTransactionStateError("REFUND requires a reference");
+  }
+
+  if (input.money.currency !== wallet.currency) {
+    transaction.reject(FailureCode.CurrencyMismatch);
+    return { transaction };
+  }
+
+  if (!input.reference) {
+    transaction.markPendingReference();
+    return { transaction };
+  }
+
+  if (!sameBet(input.reference, wallet, input.roundId)) {
+    transaction.reject(FailureCode.InvalidReference);
+    return { transaction };
+  }
+
+  if (!input.money.equals(Money.from({ amount: input.reference.amount, currency: input.reference.currency }))) {
+    transaction.reject(FailureCode.AmountMismatch);
+    return { transaction };
+  }
+
+  if (input.alreadyReversed) {
+    transaction.reject(FailureCode.AlreadyReversed);
+    return { transaction };
+  }
+
+  const entry = wallet.credit({
+    money: input.money,
+    at: input.at,
+    ledgerId: input.ledgerId,
+    transactionId: transaction.id,
+  });
+  transaction.markProcessed(input.at, input.reference.id);
+  return { transaction, entry };
 }
 
 function sameBet(reference: ResolvedReference, wallet: Wallet, roundId: string): boolean {

@@ -144,7 +144,69 @@ describe("concurrent wagers", () => {
       expect(moved.body.balance).toEqual({ amount: "25.00", currency: "BRL" });
     });
   }, 20_000);
+
+  test("two refunds of the same bet in parallel credit once", async () => {
+    const playerId = randomUUID();
+    const walletId = await openWallet(playerId, "100.00");
+    const betBody = bet(playerId, walletId, "40.00");
+    const placed = await postWager(betBody);
+    expect(placed.status).toBe(201);
+
+    const first = refund(playerId, walletId, "40.00", betBody.externalTransactionId as string);
+    const second = refund(playerId, walletId, "40.00", betBody.externalTransactionId as string);
+    const [left, right] = await Promise.all([postWager(first), postWager(second)]);
+    const processed = [left, right].filter((result) => result.body.status === "PROCESSED");
+    const rejected = [left, right].filter((result) => result.body.status === "REJECTED");
+
+    expect(processed).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(processed[0]?.status).toBe(201);
+    expect(rejected[0]?.status).toBe(422);
+    expect(processed[0]?.body).toMatchObject({
+      balance: { amount: "100.00", currency: "BRL" },
+      idempotentReplay: false,
+    });
+    expect(rejected[0]?.body).toMatchObject({
+      failureCode: "ALREADY_REVERSED",
+      balance: { amount: "100.00", currency: "BRL" },
+      idempotentReplay: false,
+    });
+
+    const replayed = await postWager(processed[0]!.request);
+    expect(replayed.body).toMatchObject({
+      transactionId: processed[0]?.body.transactionId,
+      balance: { amount: "100.00", currency: "BRL" },
+      idempotentReplay: true,
+    });
+    expect(await walletSnapshot(walletId)).toEqual({
+      balance: "100.00",
+      version: "3",
+      reconstructed: "100.00",
+      debits: "1",
+    });
+    const credits = await orm.em.getConnection().execute<Array<{ credits: string }>>(
+      `select count(*) filter (where direction = 'CREDIT')::text as credits
+       from wallet_ledger_entries
+       where wallet_id = ?::uuid`,
+      [walletId],
+    );
+    expect(credits[0]?.credits).toBe("2");
+  }, 20_000);
 });
+
+function refund(playerId: string, walletId: string, amount: string, referenceExternalTransactionId: string): Record<string, unknown> {
+  return {
+    providerId: "provider-a",
+    externalTransactionId: randomUUID(),
+    playerId,
+    walletId,
+    roundId: "round-race",
+    gameId: "fortune-chimp",
+    kind: "REFUND",
+    money: { amount, currency: "BRL" },
+    referenceExternalTransactionId,
+  };
+}
 
 function bet(playerId: string, walletId: string, amount: string): Record<string, unknown> {
   return {

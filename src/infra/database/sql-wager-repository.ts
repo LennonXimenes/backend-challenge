@@ -9,7 +9,7 @@ import { type StoredWager, WagerRepository } from "../../application/wagering/wa
 import { Wallet } from "../../domain/wallet/wallet";
 import { WalletNotFoundError } from "../../domain/wallet/wallet-error";
 import { WagerConflictError } from "../../domain/wager/wager-error";
-import { WagerTransaction } from "../../domain/wager/wager-transaction";
+import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from "../../domain/wager/wager-transaction";
 import { constraintText } from "./constraint-error";
 import { ledgerRecordFrom } from "./ledger.record";
 import { normalizeAmount } from "./numeric-string.type";
@@ -23,7 +23,7 @@ export class SqlWagerRepository extends WagerRepository {
     super();
   }
 
-  async submit(input: StoredWager): Promise<SubmitWagerResult> {
+  async submit(input: StoredWager, reversalRetry = false): Promise<SubmitWagerResult> {
     const hash = movementPayloadHash(input);
 
     try {
@@ -48,8 +48,11 @@ export class SqlWagerRepository extends WagerRepository {
         const reference = input.referenceExternalTransactionId
           ? await findReference(em, input.providerId, input.referenceExternalTransactionId)
           : undefined;
+        const alreadyReversed = input.kind === WagerTransactionKind.Refund && input.referenceExternalTransactionId
+          ? await hasActiveReversal(em, input.providerId, input.referenceExternalTransactionId, input.kind)
+          : false;
         const wallet = walletFromRecord(walletRecord);
-        const decision = decideMovement(wallet, { ...input, reference });
+        const decision = decideMovement(wallet, { ...input, reference, alreadyReversed });
         const observed = { amount: wallet.balance.toJSON().amount, currency: wallet.currency };
 
         em.persist(wagerRecordFrom(decision.transaction, observed));
@@ -83,6 +86,14 @@ export class SqlWagerRepository extends WagerRepository {
 
       if (text.includes("wager_transactions_provider_external_unique")) {
         throw new WagerConflictError();
+      }
+
+      if (text.includes("wager_transactions_one_reversal_per_reference")) {
+        if (reversalRetry) {
+          throw error;
+        }
+
+        return this.submit(input, true);
       }
 
       throw error;
@@ -127,7 +138,29 @@ async function findReference(
     walletId: record.walletId,
     roundId: record.roundId,
     currency: record.currency.trim(),
+    amount: normalizeAmount(record.amount),
   };
+}
+
+async function hasActiveReversal(
+  em: EntityManager,
+  providerId: string,
+  referenceExternalTransactionId: string,
+  kind: string,
+): Promise<boolean> {
+  const active = await em.findOne(WagerRecord, {
+    providerId,
+    referenceExternalTransactionId,
+    kind,
+    status: {
+      $in: [
+        WagerTransactionStatus.Pending,
+        WagerTransactionStatus.PendingReference,
+        WagerTransactionStatus.Processed,
+      ],
+    },
+  });
+  return active !== null;
 }
 
 function replay(record: WagerRecord, hash: string): SubmitWagerResult {

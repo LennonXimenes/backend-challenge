@@ -135,6 +135,122 @@ describe("wallet movements", () => {
     }).map((message) => message.eventType)).toEqual(["WagerTransactionProcessed"]);
   });
 
+  test("a refund credits the referenced bet once and rejects a second reversal", () => {
+    const wallet = openedWallet();
+    wallet.debit({
+      money: Money.from({ amount: "40.00", currency: "BRL" }),
+      at,
+      ledgerId: openingLedgerId,
+      transactionId: openingTransactionId,
+    });
+    const reference = {
+      id: "77777777-7777-4777-8777-777777777777",
+      kind: WagerTransactionKind.Bet,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "40.00",
+    };
+    const refund = decideMovement(wallet, {
+      transactionId,
+      ledgerId,
+      providerId: "provider-a",
+      externalTransactionId: "refund-1",
+      idempotencyKey: "provider-a:refund-1",
+      playerId,
+      walletId,
+      roundId: "round-1",
+      gameId: "fortune-chimp",
+      kind: WagerTransactionKind.Refund,
+      money: Money.from({ amount: "40.00", currency: "BRL" }),
+      referenceExternalTransactionId: "bet-1",
+      reference,
+      at,
+    });
+
+    expect(refund.entry?.direction).toBe(LedgerDirection.Credit);
+    expect(refund.transaction.status).toBe(WagerTransactionStatus.Processed);
+    expect(wallet.balance.toJSON().amount).toBe("100.00");
+    expect(wallet.version).toBe(3);
+
+    const again = decideMovement(wallet, {
+      transactionId: "88888888-8888-4888-8888-888888888888",
+      ledgerId: "99999999-9999-4999-8999-999999999999",
+      providerId: "provider-a",
+      externalTransactionId: "refund-2",
+      idempotencyKey: "provider-a:refund-2",
+      playerId,
+      walletId,
+      roundId: "round-1",
+      gameId: "fortune-chimp",
+      kind: WagerTransactionKind.Refund,
+      money: Money.from({ amount: "40.00", currency: "BRL" }),
+      referenceExternalTransactionId: "bet-1",
+      reference,
+      alreadyReversed: true,
+      at,
+    });
+    expect(again.entry).toBeUndefined();
+    expect(again.transaction.status).toBe(WagerTransactionStatus.Rejected);
+    expect(again.transaction.failureCode).toBe(FailureCode.AlreadyReversed);
+    expect(wallet.balance.toJSON().amount).toBe("100.00");
+    expect(wallet.version).toBe(3);
+  });
+
+  test("a refund with a different amount or a missing bet does not credit", () => {
+    const wallet = openedWallet();
+    const reference = {
+      id: "77777777-7777-4777-8777-777777777777",
+      kind: WagerTransactionKind.Bet,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "40.00",
+    };
+    const mismatch = decideMovement(wallet, {
+      transactionId,
+      ledgerId,
+      providerId: "provider-a",
+      externalTransactionId: "refund-amount",
+      idempotencyKey: "provider-a:refund-amount",
+      playerId,
+      walletId,
+      roundId: "round-1",
+      gameId: "fortune-chimp",
+      kind: WagerTransactionKind.Refund,
+      money: Money.from({ amount: "10.00", currency: "BRL" }),
+      referenceExternalTransactionId: "bet-1",
+      reference,
+      at,
+    });
+    expect(mismatch.transaction.failureCode).toBe(FailureCode.AmountMismatch);
+    expect(mismatch.entry).toBeUndefined();
+
+    const pending = decideMovement(wallet, {
+      transactionId: "88888888-8888-4888-8888-888888888888",
+      ledgerId,
+      providerId: "provider-a",
+      externalTransactionId: "refund-early",
+      idempotencyKey: "provider-a:refund-early",
+      playerId,
+      walletId,
+      roundId: "round-1",
+      gameId: "fortune-chimp",
+      kind: WagerTransactionKind.Refund,
+      money: Money.from({ amount: "40.00", currency: "BRL" }),
+      referenceExternalTransactionId: "bet-later",
+      at,
+    });
+    expect(pending.transaction.status).toBe(WagerTransactionStatus.PendingReference);
+    expect(pending.entry).toBeUndefined();
+    expect(wallet.balance.toJSON().amount).toBe("100.00");
+    expect(wallet.version).toBe(1);
+  });
+
   test("opening cannot be submitted", () => {
     expect(() => WagerTransaction.create({
       id: transactionId,
