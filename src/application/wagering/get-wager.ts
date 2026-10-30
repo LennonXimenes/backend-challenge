@@ -19,4 +19,17 @@ export class GetWager {
 
     return stored;
   }
+
+  async executeByExternal(providerId: string, externalTransactionId: string): Promise<WagerLookup> {
+    if (providerId.trim() === "" || externalTransactionId.trim() === "") {
+      throw new InvalidWalletInputError("providerId and externalTransactionId are required");
+    }
+
+    const stored = await this.wagers.findByExternal(providerId, externalTransactionId);
+    if (!stored) {
+      throw new TransactionNotFoundError(externalTransactionId);
+    }
+
+    return stored;
+  }
 }

@@ -164,17 +164,12 @@ export class SqlWagerRepository extends WagerRepository {
 
   async findById(transactionId: string): Promise<WagerLookup | undefined> {
     const record = await this.orm.em.fork().findOne(WagerRecord, { id: transactionId });
-    if (!record) {
-      return undefined;
-    }
+    return record ? lookupFrom(record) : undefined;
+  }
 
-    return {
-      transaction: transactionFromRecord(record),
-      balance: {
-        amount: normalizeAmount(record.observedBalance),
-        currency: record.observedCurrency.trim(),
-      },
-    };
+  async findByExternal(providerId: string, externalTransactionId: string): Promise<WagerLookup | undefined> {
+    const record = await this.orm.em.fork().findOne(WagerRecord, { providerId, externalTransactionId });
+    return record ? lookupFrom(record) : undefined;
   }
 
   async resumeNext(now: Date): Promise<boolean> {
@@ -340,6 +335,16 @@ function assignOutcome(record: WagerRecord, transaction: WagerTransaction, walle
   record.referenceNextAttemptAt = null;
   record.observedBalance = wallet.balance.toJSON().amount;
   record.observedCurrency = wallet.currency;
+}
+
+function lookupFrom(record: WagerRecord): WagerLookup {
+  return {
+    transaction: transactionFromRecord(record),
+    balance: {
+      amount: normalizeAmount(record.observedBalance),
+      currency: record.observedCurrency.trim(),
+    },
+  };
 }
 
 function replay(record: WagerRecord, hash: string): SubmitWagerResult {

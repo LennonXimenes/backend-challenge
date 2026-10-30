@@ -4,10 +4,11 @@ import { PendingReferenceWorker } from "./application/wagering/pending-reference
 import { SubmitWager } from "./application/wagering/submit-wager";
 import { WagerRepository } from "./application/wagering/wager-repository";
 import { SqlWagerRepository } from "./infra/database/sql-wager-repository";
+import { ProviderWagerController } from "./infra/http/provider-wager.controller";
 import { WageringController } from "./infra/http/wagering.controller";
 
 @Module({
-  controllers: [WageringController],
+  controllers: [WageringController, ProviderWagerController],
   providers: [
     PendingReferenceWorker,
     {

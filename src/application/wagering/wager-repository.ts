@@ -34,4 +34,5 @@ export abstract class WagerRepository {
   abstract consume(input: StoredWager, inbox: InboxClaim): Promise<ConsumeResult>;
   abstract resumeNext(now: Date): Promise<boolean>;
   abstract findById(transactionId: string): Promise<WagerLookup | undefined>;
+  abstract findByExternal(providerId: string, externalTransactionId: string): Promise<WagerLookup | undefined>;
 }

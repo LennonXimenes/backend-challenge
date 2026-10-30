@@ -6,7 +6,7 @@ import { writeOperationLog } from "../../application/observability/operation-log
 
 interface RequestLogSource {
   headers?: Record<string, string | string[] | undefined>;
-  params?: { walletId?: string; transactionId?: string };
+  params?: { walletId?: string; transactionId?: string; providerId?: string };
 }
 
 interface JsonResponse {
@@ -26,6 +26,7 @@ export class WalletExceptionFilter implements ExceptionFilter {
       correlationId: typeof correlation === "string" ? correlation : null,
       walletId: request.params?.walletId ?? null,
       transactionId: request.params?.transactionId ?? null,
+      providerId: request.params?.providerId ?? null,
       error: exception instanceof Error ? exception.name : "Error",
     });
 
