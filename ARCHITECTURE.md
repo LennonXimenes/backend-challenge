@@ -38,7 +38,7 @@ A outbox grava o envelope do evento em `jsonb`. O valor monetário dentro de `da
 
 `POST /wagering/transactions` aceita `BET` e `WIN`. O header `Idempotency-Key` é obrigatório. O servidor não inventa a key. Os testes enviam `{providerId}:{externalTransactionId}`.
 
-Dentro de `em.transactional()`, a wallet é lida com `LockMode.PESSIMISTIC_WRITE`, que vira `select ... for update` daquela linha. Não há lock global. A coluna `version` sobe só quando o saldo muda. Ela não é o optimistic lock do MikroORM: esse modo incrementaria a versão em qualquer flush.
+Dentro de `em.transactional()`, a wallet é lida com `LockMode.PESSIMISTIC_WRITE`, que vira `select ... for update` daquela linha. Não há lock global. Uma transação que segura a linha de uma wallet não impede o débito de outra. A coluna `version` sobe só quando o saldo muda. Ela não é o optimistic lock do MikroORM: esse modo incrementaria a versão em qualquer flush. Duas `BET` de `80.00` sobre saldo `100.00` deixam uma `PROCESSED`, uma `REJECTED` com `INSUFFICIENT_BALANCE`, saldo `20.00` e um débito. A mesma aposta 50 vezes em paralelo deixa um débito. O replay dessas respostas não grava de novo.
 
 `BET` debita e gera um `DEBIT`. `WIN` credita e gera um `CREDIT`. Saldo insuficiente, moeda diferente, jogador diferente ou referência inválida gravam a transação como `REJECTED`, sem lançamento e sem mexer no saldo. `WIN` com referência que ainda não existe fica `PENDING_REFERENCE`, também sem lançamento. O worker que reprocessa essa fila ainda não existe.
 
@@ -56,4 +56,4 @@ A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OP
 
 ## Ainda em aberto
 
-`LOSS`, `REFUND`, `ROLLBACK`, o publisher da outbox e o worker de `PENDING_REFERENCE`. `WagerTransactionProcessed` ainda não cobre `LOSS`. A corrida de duas apostas ainda não tem teste.
+`LOSS`, `REFUND`, `ROLLBACK`, o publisher da outbox, o worker de `PENDING_REFERENCE` e a corrida em 3 processos. `WagerTransactionProcessed` ainda não cobre `LOSS`. A corrida de `REFUND` espera a operação existir.
