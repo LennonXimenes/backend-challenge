@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { GetWallet } from "./application/wallets/get-wallet";
+import { ListLedger } from "./application/wallets/list-ledger";
 import { OpenWallet } from "./application/wallets/open-wallet";
 import { WalletRepository } from "./application/wallets/wallet-repository";
 import { SqlWalletRepository } from "./infra/database/sql-wallet-repository";
@@ -16,6 +17,11 @@ import { WalletsController } from "./infra/http/wallets.controller";
     {
       provide: GetWallet,
       useFactory: (wallets: WalletRepository) => new GetWallet(wallets),
+      inject: [WalletRepository],
+    },
+    {
+      provide: ListLedger,
+      useFactory: (wallets: WalletRepository) => new ListLedger(wallets),
       inject: [WalletRepository],
     },
     {
