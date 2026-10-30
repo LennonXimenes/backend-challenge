@@ -62,9 +62,23 @@ Os contadores do processo cobrem transações por status, duplicatas, retries, D
 
 `GET /health/live` responde `200` sem autenticação, só para dizer que o processo atende. `GET /health/ready` exige o Postgres (`select 1`) e a fila configurada em `SQS_QUEUE_URL`. Os dois precisam responder. Se um falha, a resposta é `503` com `postgres` e `sqs` em booleano, sem URL e sem saldo.
 
-## Ainda em aberto
+## Decisões e limites
 
-O fechamento do `ARCHITECTURE.md`, inclusive a decisão de auth.
+O ORM é o MikroORM, com unit of work e identity map. O schema continua SQL explícito e o `snapshot` fica desligado, para o ORM não gerar migration sozinho. Prisma fica de fora.
+
+`Money` é string decimal com escala 2. Mais de duas casas é erro, sem arredondar. O banco guarda `numeric(19, 2)`. O modelo aceita várias moedas; a operação deste desafio usa `BRL`.
+
+O lock é pessimista na linha da wallet, não global. A `version` sobe só quando o saldo muda. Ela não é o optimistic lock do ORM.
+
+O `payloadHash` é SHA-256 do JSON canônico, só com campos de negócio. A mesma key com outro hash é `409`. A idempotência fica na unique do Postgres.
+
+`PENDING_REFERENCE` tenta cinco vezes: 1s, 2s, 4s, 8s e 16s. Depois disso, `REFERENCE_NOT_FOUND`.
+
+HTTP: `201` processada, `202` pendente, `422` rejeição, `400` payload, `404` ausente, `409` conflito. Health não pede autenticação.
+
+Auth não entra nesta entrega. Não há tabela de usuário nem hash de senha. O desenho adiado é um IdP externo, Keycloak, na frente de `POST /wallets` e `POST /wagering/transactions`. O ponto de extensão é `ProviderIdentityPort`: `UnconfiguredIdentity` recusa o token até o IdP existir, e `OpenAccessGuard` hoje libera o acesso. Esse guard não está registrado. `GET /health/live` e `GET /health/ready` continuam abertos. A fila é canal interno. O `providerId` e o `playerId` da mensagem passam pela mesma regra do domínio: jogador diferente da wallet fica `REJECTED` com `PLAYER_MISMATCH`, sem lançamento.
+
+Limites conhecidos: ainda não há consulta do ledger, consulta da transação nem reconciliação. As métricas morrem com o processo e não se somam entre instâncias. A corrida do saldo prova o Postgres; ela não atravessa a fila. OpenTelemetry, teste de carga e partidas dobradas ficam de fora.
 
 ## SQS
 
