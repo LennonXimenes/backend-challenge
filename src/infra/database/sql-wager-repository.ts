@@ -48,7 +48,8 @@ export class SqlWagerRepository extends WagerRepository {
         const reference = input.referenceExternalTransactionId
           ? await findReference(em, input.providerId, input.referenceExternalTransactionId)
           : undefined;
-        const alreadyReversed = input.kind === WagerTransactionKind.Refund && input.referenceExternalTransactionId
+        const reverses = input.kind === WagerTransactionKind.Refund || input.kind === WagerTransactionKind.Rollback;
+        const alreadyReversed = reverses && input.referenceExternalTransactionId
           ? await hasActiveReversal(em, input.providerId, input.referenceExternalTransactionId, input.kind)
           : false;
         const wallet = walletFromRecord(walletRecord);

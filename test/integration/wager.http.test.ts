@@ -428,7 +428,7 @@ describe("POST /wagering/transactions", () => {
       gameId: "fortune-chimp",
       kind: "REFUND",
       money: { amount: "40.00", currency: "BRL" },
-      referenceExternalTransactionId: "bet-not-here",
+      referenceExternalTransactionId: randomUUID(),
     });
     expect(early.status).toBe(202);
     expect(early.body).toMatchObject({
@@ -516,6 +516,171 @@ describe("POST /wagering/transactions", () => {
     expect(ledger[0]).toEqual({ credits: "2", debits: "1" });
   });
 
+  test("a rollback credits the bet once and does not block a refund of that bet", async () => {
+    const playerId = randomUUID();
+    const opened = await postJson("/wallets", {
+      playerId,
+      initialBalance: { amount: "100.00", currency: "BRL" },
+    });
+    const walletId = opened.body.id as string;
+    const betExternalId = randomUUID();
+    expect((await postWager({
+      providerId: "provider-a",
+      externalTransactionId: betExternalId,
+      playerId,
+      walletId,
+      roundId: "round-rollback",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "40.00", currency: "BRL" },
+    })).status).toBe(201);
+
+    const mismatch = await postWager(rollbackBody(playerId, walletId, "10.00", betExternalId));
+    expect(mismatch.status).toBe(422);
+    expect(mismatch.body.failureCode).toBe("AMOUNT_MISMATCH");
+
+    const early = await postWager(rollbackBody(playerId, walletId, "40.00", randomUUID()));
+    expect(early.status).toBe(202);
+    expect(early.body.status).toBe("PENDING_REFERENCE");
+
+    const rollback = await postWager(rollbackBody(playerId, walletId, "40.00", betExternalId));
+    expect(rollback.status).toBe(201);
+    expect(rollback.body).toMatchObject({
+      status: "PROCESSED",
+      balance: { amount: "100.00", currency: "BRL" },
+      idempotentReplay: false,
+    });
+    expect(await eventTypes(rollback.body.transactionId as string)).toEqual([
+      "WagerTransactionProcessed",
+      "WalletBalanceChanged",
+    ]);
+    expect(await ledgerDirection(rollback.body.transactionId as string)).toBe("CREDIT");
+
+    const replay = await postWager(rollback.request);
+    expect(replay.body).toMatchObject({
+      transactionId: rollback.body.transactionId,
+      idempotentReplay: true,
+      balance: { amount: "100.00", currency: "BRL" },
+    });
+
+    const again = await postWager(rollbackBody(playerId, walletId, "40.00", betExternalId));
+    expect(again.status).toBe(422);
+    expect(again.body.failureCode).toBe("ALREADY_REVERSED");
+
+    const refund = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-rollback",
+      gameId: "fortune-chimp",
+      kind: "REFUND",
+      money: { amount: "40.00", currency: "BRL" },
+      referenceExternalTransactionId: betExternalId,
+    });
+    expect(refund.status).toBe(201);
+    expect(refund.body.balance).toEqual({ amount: "140.00", currency: "BRL" });
+
+    const missingReference = await fetch(`${baseUrl}/wagering/transactions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "provider-a:rollback-without-reference",
+      },
+      body: JSON.stringify({
+        providerId: "provider-a",
+        externalTransactionId: "rollback-without-reference",
+        playerId,
+        walletId,
+        roundId: "round-rollback",
+        gameId: "fortune-chimp",
+        kind: "ROLLBACK",
+        money: { amount: "40.00", currency: "BRL" },
+      }),
+    });
+    expect(missingReference.status).toBe(400);
+
+    const wallet = await (await fetch(`${baseUrl}/wallets/${walletId}`)).json() as { version: number; balance: { amount: string } };
+    expect(wallet).toMatchObject({ version: 4, balance: { amount: "140.00" } });
+    expect(await reconstructed(walletId)).toBe("140.00");
+  });
+
+  test("a rollback debits a refund and rejects a debit that would go negative", async () => {
+    const playerId = randomUUID();
+    const opened = await postJson("/wallets", {
+      playerId,
+      initialBalance: { amount: "50.00", currency: "BRL" },
+    });
+    const walletId = opened.body.id as string;
+    const winExternalId = randomUUID();
+    expect((await postWager({
+      providerId: "provider-a",
+      externalTransactionId: winExternalId,
+      playerId,
+      walletId,
+      roundId: "round-rollback",
+      gameId: "fortune-chimp",
+      kind: "WIN",
+      money: { amount: "20.00", currency: "BRL" },
+    })).status).toBe(201);
+    expect((await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-rollback",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "60.00", currency: "BRL" },
+    })).status).toBe(201);
+
+    const exceeded = await postWager(rollbackBody(playerId, walletId, "20.00", winExternalId));
+    expect(exceeded.status).toBe(422);
+    expect(exceeded.body).toMatchObject({
+      status: "REJECTED",
+      failureCode: "REVERSAL_EXCEEDS_BALANCE",
+      balance: { amount: "10.00", currency: "BRL" },
+    });
+    expect(await eventTypes(exceeded.body.transactionId as string)).toEqual(["WagerTransactionRejected"]);
+
+    const refundedPlayer = randomUUID();
+    const refundedWallet = await postJson("/wallets", {
+      playerId: refundedPlayer,
+      initialBalance: { amount: "80.00", currency: "BRL" },
+    });
+    const refundedWalletId = refundedWallet.body.id as string;
+    const betExternalId = randomUUID();
+    expect((await postWager({
+      providerId: "provider-a",
+      externalTransactionId: betExternalId,
+      playerId: refundedPlayer,
+      walletId: refundedWalletId,
+      roundId: "round-rollback",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "30.00", currency: "BRL" },
+    })).status).toBe(201);
+    const refundExternalId = randomUUID();
+    expect((await postWager({
+      providerId: "provider-a",
+      externalTransactionId: refundExternalId,
+      playerId: refundedPlayer,
+      walletId: refundedWalletId,
+      roundId: "round-rollback",
+      gameId: "fortune-chimp",
+      kind: "REFUND",
+      money: { amount: "30.00", currency: "BRL" },
+      referenceExternalTransactionId: betExternalId,
+    })).status).toBe(201);
+
+    const rollback = await postWager(rollbackBody(refundedPlayer, refundedWalletId, "30.00", refundExternalId));
+    expect(rollback.status).toBe(201);
+    expect(rollback.body.balance).toEqual({ amount: "50.00", currency: "BRL" });
+    expect(await ledgerDirection(rollback.body.transactionId as string)).toBe("DEBIT");
+    expect(await reconstructed(refundedWalletId)).toBe("50.00");
+    expect(await reconstructed(walletId)).toBe("10.00");
+  });
+
   test("a missing idempotency key is a bad request", async () => {
     const response = await fetch(`${baseUrl}/wagering/transactions`, {
       method: "POST",
@@ -534,6 +699,42 @@ describe("POST /wagering/transactions", () => {
     expect(response.status).toBe(400);
   });
 });
+
+function rollbackBody(playerId: string, walletId: string, amount: string, referenceExternalTransactionId: string): Record<string, unknown> {
+  return {
+    providerId: "provider-a",
+    externalTransactionId: randomUUID(),
+    playerId,
+    walletId,
+    roundId: "round-rollback",
+    gameId: "fortune-chimp",
+    kind: "ROLLBACK",
+    money: { amount, currency: "BRL" },
+    referenceExternalTransactionId,
+  };
+}
+
+async function ledgerDirection(transactionId: string): Promise<string | undefined> {
+  const rows = await orm.em.getConnection().execute<Array<{ direction: string }>>(
+    `select direction from wallet_ledger_entries where transaction_id = ?::uuid`,
+    [transactionId],
+  );
+  return rows[0]?.direction;
+}
+
+async function reconstructed(walletId: string): Promise<string | undefined> {
+  const rows = await orm.em.getConnection().execute<Array<{ balance: string; reconstructed: string }>>(
+    `select w.balance::text as balance,
+            coalesce(sum(case when l.direction = 'CREDIT' then l.amount else -l.amount end), 0)::text as reconstructed
+     from wallets w
+     join wallet_ledger_entries l on l.wallet_id = w.id
+     where w.id = ?::uuid
+     group by w.balance`,
+    [walletId],
+  );
+  expect(rows[0]?.balance).toBe(rows[0]?.reconstructed);
+  return rows[0]?.reconstructed;
+}
 
 async function eventTypes(transactionId: string): Promise<string[]> {
   const rows = await orm.em.getConnection().execute<Array<{ event_type: string }>>(

@@ -11,7 +11,7 @@ export interface SubmitWagerCommand {
   walletId: string;
   roundId: string;
   gameId: string;
-  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss | WagerTransactionKind.Refund;
+  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss | WagerTransactionKind.Refund | WagerTransactionKind.Rollback;
   money: Money;
   referenceExternalTransactionId?: string;
 }

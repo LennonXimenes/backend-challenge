@@ -5,4 +5,5 @@ export const FailureCode = {
   PlayerMismatch: "PLAYER_MISMATCH",
   AmountMismatch: "AMOUNT_MISMATCH",
   AlreadyReversed: "ALREADY_REVERSED",
+  ReversalExceedsBalance: "REVERSAL_EXCEEDS_BALANCE",
 } as const;

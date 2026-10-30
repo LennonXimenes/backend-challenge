@@ -28,7 +28,7 @@ export interface MovementInput {
   walletId: string;
   roundId: string;
   gameId: string;
-  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss | WagerTransactionKind.Refund;
+  kind: WagerTransactionKind.Bet | WagerTransactionKind.Win | WagerTransactionKind.Loss | WagerTransactionKind.Refund | WagerTransactionKind.Rollback;
   money: Wallet["balance"];
   referenceExternalTransactionId?: string;
   reference?: ResolvedReference;
@@ -92,6 +92,10 @@ export function decideMovement(wallet: Wallet, input: MovementInput): MovementDe
     return decideRefund(wallet, transaction, input);
   }
 
+  if (input.kind === WagerTransactionKind.Rollback) {
+    return decideRollback(wallet, transaction, input);
+  }
+
   if (input.kind === WagerTransactionKind.Loss && input.money.currency !== wallet.currency) {
     transaction.reject(FailureCode.CurrencyMismatch);
     return { transaction };
@@ -145,6 +149,11 @@ function decideRefund(wallet: Wallet, transaction: WagerTransaction, input: Move
   }
 
   if (!input.reference) {
+    if (input.alreadyReversed) {
+      transaction.reject(FailureCode.AlreadyReversed);
+      return { transaction };
+    }
+
     transaction.markPendingReference();
     return { transaction };
   }
@@ -174,13 +183,78 @@ function decideRefund(wallet: Wallet, transaction: WagerTransaction, input: Move
   return { transaction, entry };
 }
 
-function sameBet(reference: ResolvedReference, wallet: Wallet, roundId: string): boolean {
+function decideRollback(wallet: Wallet, transaction: WagerTransaction, input: MovementInput): MovementDecision {
+  if (!input.referenceExternalTransactionId) {
+    throw new InvalidTransactionStateError("ROLLBACK requires a reference");
+  }
+
+  if (input.money.currency !== wallet.currency) {
+    transaction.reject(FailureCode.CurrencyMismatch);
+    return { transaction };
+  }
+
+  if (!input.reference) {
+    if (input.alreadyReversed) {
+      transaction.reject(FailureCode.AlreadyReversed);
+      return { transaction };
+    }
+
+    transaction.markPendingReference();
+    return { transaction };
+  }
+
+  if (!sameParty(input.reference, wallet, input.roundId) || !rollbackKind(input.reference.kind)) {
+    transaction.reject(FailureCode.InvalidReference);
+    return { transaction };
+  }
+
+  if (!input.money.equals(Money.from({ amount: input.reference.amount, currency: input.reference.currency }))) {
+    transaction.reject(FailureCode.AmountMismatch);
+    return { transaction };
+  }
+
+  if (input.alreadyReversed) {
+    transaction.reject(FailureCode.AlreadyReversed);
+    return { transaction };
+  }
+
+  try {
+    const movement = { money: input.money, at: input.at, ledgerId: input.ledgerId, transactionId: transaction.id };
+    const entry = rollbackKind(input.reference.kind) === "credit" ? wallet.credit(movement) : wallet.debit(movement);
+    transaction.markProcessed(input.at, input.reference.id);
+    return { transaction, entry };
+  } catch (error) {
+    if (error instanceof InsufficientBalanceError) {
+      transaction.reject(FailureCode.ReversalExceedsBalance);
+      return { transaction };
+    }
+
+    throw error;
+  }
+}
+
+function rollbackKind(kind: string): "credit" | "debit" | undefined {
+  if (kind === WagerTransactionKind.Bet) {
+    return "credit";
+  }
+
+  if (kind === WagerTransactionKind.Win || kind === WagerTransactionKind.Refund) {
+    return "debit";
+  }
+
+  return undefined;
+}
+
+function sameParty(reference: ResolvedReference, wallet: Wallet, roundId: string): boolean {
   return (
-    reference.kind === WagerTransactionKind.Bet &&
     reference.status === WagerTransactionStatus.Processed &&
     reference.playerId === wallet.playerId &&
     reference.walletId === wallet.id &&
     reference.roundId === roundId &&
     reference.currency === wallet.currency
   );
+}
+
+function sameBet(reference: ResolvedReference, wallet: Wallet, roundId: string): boolean {
+  return reference.kind === WagerTransactionKind.Bet && sameParty(reference, wallet, roundId);
 }

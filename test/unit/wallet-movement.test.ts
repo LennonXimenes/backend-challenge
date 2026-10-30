@@ -17,6 +17,40 @@ const ledgerId = "44444444-4444-4444-8444-444444444444";
 const openingTransactionId = "55555555-5555-4555-8555-555555555555";
 const openingLedgerId = "66666666-6666-4666-8666-666666666666";
 
+function rollbackInput(
+  amount: string,
+  reference: {
+    id: string;
+    kind: WagerTransactionKind;
+    status: WagerTransactionStatus;
+    playerId: string;
+    walletId: string;
+    roundId: string;
+    currency: string;
+    amount: string;
+  },
+  overrides: { alreadyReversed?: boolean; externalTransactionId?: string; roundId?: string } = {},
+) {
+  const externalTransactionId = overrides.externalTransactionId ?? "rollback-1";
+  return {
+    transactionId,
+    ledgerId,
+    providerId: "provider-a",
+    externalTransactionId,
+    idempotencyKey: `provider-a:${externalTransactionId}`,
+    playerId,
+    walletId,
+    roundId: overrides.roundId ?? "round-1",
+    gameId: "fortune-chimp",
+    kind: WagerTransactionKind.Rollback,
+    money: Money.from({ amount, currency: "BRL" }),
+    referenceExternalTransactionId: "referenced-1",
+    reference,
+    alreadyReversed: overrides.alreadyReversed,
+    at,
+  };
+}
+
 function openedWallet() {
   return Wallet.open({
     id: walletId,
@@ -247,8 +281,123 @@ describe("wallet movements", () => {
     });
     expect(pending.transaction.status).toBe(WagerTransactionStatus.PendingReference);
     expect(pending.entry).toBeUndefined();
+    const claimed = decideMovement(wallet, {
+      transactionId: "99999999-9999-4999-8999-999999999999",
+      ledgerId,
+      providerId: "provider-a",
+      externalTransactionId: "refund-early-2",
+      idempotencyKey: "provider-a:refund-early-2",
+      playerId,
+      walletId,
+      roundId: "round-1",
+      gameId: "fortune-chimp",
+      kind: WagerTransactionKind.Refund,
+      money: Money.from({ amount: "40.00", currency: "BRL" }),
+      referenceExternalTransactionId: "bet-later",
+      alreadyReversed: true,
+      at,
+    });
+    expect(claimed.transaction.failureCode).toBe(FailureCode.AlreadyReversed);
     expect(wallet.balance.toJSON().amount).toBe("100.00");
     expect(wallet.version).toBe(1);
+  });
+
+  test("a rollback inverts a bet with a credit and a win with a debit", () => {
+    const wallet = openedWallet();
+    wallet.debit({
+      money: Money.from({ amount: "40.00", currency: "BRL" }),
+      at,
+      ledgerId: openingLedgerId,
+      transactionId: openingTransactionId,
+    });
+    const bet = decideMovement(wallet, rollbackInput("40.00", {
+      id: "77777777-7777-4777-8777-777777777777",
+      kind: WagerTransactionKind.Bet,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "40.00",
+    }));
+    expect(bet.entry?.direction).toBe(LedgerDirection.Credit);
+    expect(bet.transaction.status).toBe(WagerTransactionStatus.Processed);
+    expect(wallet.balance.toJSON().amount).toBe("100.00");
+
+    const again = decideMovement(wallet, rollbackInput("40.00", {
+      id: "77777777-7777-4777-8777-777777777777",
+      kind: WagerTransactionKind.Bet,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "40.00",
+    }, { alreadyReversed: true, externalTransactionId: "rollback-2" }));
+    expect(again.entry).toBeUndefined();
+    expect(again.transaction.failureCode).toBe(FailureCode.AlreadyReversed);
+    expect(wallet.version).toBe(3);
+
+    const win = decideMovement(wallet, rollbackInput("20.00", {
+      id: "88888888-8888-4888-8888-888888888888",
+      kind: WagerTransactionKind.Win,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "20.00",
+    }, { externalTransactionId: "rollback-win" }));
+    expect(win.entry?.direction).toBe(LedgerDirection.Debit);
+    expect(wallet.balance.toJSON().amount).toBe("80.00");
+  });
+
+  test("a rollback that would go negative is rejected without a ledger entry", () => {
+    const wallet = openedWallet();
+    wallet.debit({
+      money: Money.from({ amount: "90.00", currency: "BRL" }),
+      at,
+      ledgerId: openingLedgerId,
+      transactionId: openingTransactionId,
+    });
+    const rejected = decideMovement(wallet, rollbackInput("20.00", {
+      id: "88888888-8888-4888-8888-888888888888",
+      kind: WagerTransactionKind.Win,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "20.00",
+    }));
+    expect(rejected.entry).toBeUndefined();
+    expect(rejected.transaction.failureCode).toBe(FailureCode.ReversalExceedsBalance);
+    expect(wallet.balance.toJSON().amount).toBe("10.00");
+    expect(wallet.version).toBe(2);
+
+    const loss = decideMovement(wallet, rollbackInput("10.00", {
+      id: "99999999-9999-4999-8999-999999999999",
+      kind: WagerTransactionKind.Loss,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "10.00",
+    }, { externalTransactionId: "rollback-loss" }));
+    expect(loss.transaction.failureCode).toBe(FailureCode.InvalidReference);
+    const otherRound = decideMovement(wallet, rollbackInput("10.00", {
+      id: "77777777-7777-4777-8777-777777777777",
+      kind: WagerTransactionKind.Bet,
+      status: WagerTransactionStatus.Processed,
+      playerId,
+      walletId,
+      roundId: "round-1",
+      currency: "BRL",
+      amount: "10.00",
+    }, { externalTransactionId: "rollback-other-round", roundId: "other-round" }));
+    expect(otherRound.transaction.failureCode).toBe(FailureCode.InvalidReference);
+    expect(wallet.balance.toJSON().amount).toBe("10.00");
   });
 
   test("opening cannot be submitted", () => {
