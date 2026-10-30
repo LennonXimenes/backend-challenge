@@ -64,7 +64,7 @@ Os contadores do processo cobrem transações por status, duplicatas, retries, D
 
 ## Ainda em aberto
 
-O `README` de entrega.
+O fechamento do `ARCHITECTURE.md`, inclusive a decisão de auth.
 
 ## SQS
 

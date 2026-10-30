@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "migration:up": "bun src/infra/database/migrate.ts up",
     "migration:down": "bun src/infra/database/migrate.ts down",
+    "queues:up": "bun src/infra/sqs/ensure-queues.ts",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test test/integration"
   },

@@ -8,6 +8,32 @@ Este desafio é a porta de entrada para fazer parte desse time. Ele foi desenhad
 
 Não esperamos perfeição — esperamos raciocínio claro, código limpo e decisões justificadas. Mostre como você pensa e como você constrói.
 
+## Como executar
+
+Exige Bun 1.4 e Docker. O `bun run` lê o `.env`.
+
+```bash
+docker compose up -d
+cp .env.example .env
+bun install
+bun run migration:up
+bun run queues:up
+bun run start
+```
+
+| Comando | O que faz |
+|---|---|
+| `bun run start` | sobe o HTTP. Com as URLs da fila no `.env`, sobe também o consumer e o publisher |
+| `bun run start:dev` | o mesmo, recarregando ao salvar |
+| `bun run migration:up` | aplica as migrations |
+| `bun run migration:down` | desfaz a última migration |
+| `bun run queues:up` | cria as filas FIFO no LocalStack |
+| `bun run typecheck` | TypeScript em `strict`, sem emitir arquivo |
+| `bun run test:unit` | testes de domínio, sem container |
+| `bun run test:integration` | testes com PostgreSQL e LocalStack já no ar |
+
+`GET http://localhost:3000/health/live` responde `200` se o processo atende. `GET http://localhost:3000/health/ready` responde `200` quando o Postgres e a fila `SQS_QUEUE_URL` respondem. As decisões de saldo, lock, idempotência e fila estão no `ARCHITECTURE.md`.
+
 ---
 
 ## 1. Visão geral
