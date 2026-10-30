@@ -252,6 +252,73 @@ describe("POST /wagering/transactions", () => {
     expect(rows[0]).toEqual({ debits: "2", credits: "1" });
   });
 
+  test("writes processed, rejected and pending events in the same transaction and does not repeat them", async () => {
+    const playerId = randomUUID();
+    const opened = await postJson("/wallets", {
+      playerId,
+      initialBalance: { amount: "100.00", currency: "BRL" },
+    });
+    const walletId = opened.body.id as string;
+    const bet = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-outbox",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "25.00", currency: "BRL" },
+    });
+    expect(bet.status).toBe(201);
+    expect(await eventTypes(bet.body.transactionId as string)).toEqual([
+      "WagerTransactionProcessed",
+      "WalletBalanceChanged",
+    ]);
+    expect(await moneyType(bet.body.transactionId as string)).toBe("string");
+
+    await postWager(bet.request);
+    expect(await eventTypes(bet.body.transactionId as string)).toEqual([
+      "WagerTransactionProcessed",
+      "WalletBalanceChanged",
+    ]);
+
+    const rejected = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-outbox",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "80.00", currency: "BRL" },
+    });
+    expect(rejected.status).toBe(422);
+    expect(await eventTypes(rejected.body.transactionId as string)).toEqual(["WagerTransactionRejected"]);
+
+    const pending = await postWager({
+      providerId: "provider-a",
+      externalTransactionId: randomUUID(),
+      playerId,
+      walletId,
+      roundId: "round-outbox",
+      gameId: "fortune-chimp",
+      kind: "WIN",
+      money: { amount: "5.00", currency: "BRL" },
+      referenceExternalTransactionId: "missing-bet",
+    });
+    expect(pending.status).toBe(202);
+    expect(await eventTypes(pending.body.transactionId as string)).toEqual(["WagerTransactionPendingReference"]);
+
+    const unpublished = await orm.em.getConnection().execute<Array<{ count: string }>>(
+      `select count(*)::text as count
+       from outbox_messages
+       where payload #>> '{data,walletId}' = ?
+         and published_at is not null`,
+      [walletId],
+    );
+    expect(unpublished[0]?.count).toBe("0");
+  });
+
   test("a missing idempotency key is a bad request", async () => {
     const response = await fetch(`${baseUrl}/wagering/transactions`, {
       method: "POST",
@@ -270,6 +337,28 @@ describe("POST /wagering/transactions", () => {
     expect(response.status).toBe(400);
   });
 });
+
+async function eventTypes(transactionId: string): Promise<string[]> {
+  const rows = await orm.em.getConnection().execute<Array<{ event_type: string }>>(
+    `select event_type
+     from outbox_messages
+     where payload #>> '{data,transactionId}' = ?
+     order by event_type`,
+    [transactionId],
+  );
+  return rows.map((row) => row.event_type);
+}
+
+async function moneyType(transactionId: string): Promise<string | undefined> {
+  const rows = await orm.em.getConnection().execute<Array<{ amount_type: string }>>(
+    `select jsonb_typeof(payload #> '{data,money,amount}') as amount_type
+     from outbox_messages
+     where payload #>> '{data,transactionId}' = ?
+       and event_type = 'WalletBalanceChanged'`,
+    [transactionId],
+  );
+  return rows[0]?.amount_type;
+}
 
 async function postJson(path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(`${baseUrl}${path}`, {

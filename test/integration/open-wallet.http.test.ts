@@ -83,6 +83,18 @@ describe("POST /wallets", () => {
       { balance: "1000.00", kind: "OPENING", direction: "CREDIT", entries: "1" },
     ]);
 
+    const events = await orm.em.getConnection().execute<Array<{ event_type: string; amount_type: string }>>(
+      `select event_type, jsonb_typeof(payload #> '{data,money,amount}') as amount_type
+       from outbox_messages
+       where payload #>> '{data,walletId}' = ?
+       order by event_type`,
+      [body.id],
+    );
+    expect(events).toEqual([
+      { event_type: "WagerTransactionProcessed", amount_type: "string" },
+      { event_type: "WalletBalanceChanged", amount_type: "string" },
+    ]);
+
     const loaded = await fetch(`${baseUrl}/wallets/${body.id}`);
     expect(loaded.status).toBe(200);
     expect(await loaded.json()).toEqual(body);
@@ -138,6 +150,11 @@ describe("POST /wallets", () => {
       [zeroBody.id],
     );
     expect(rows[0]?.count).toBe("0");
+    const events = await orm.em.getConnection().execute<Array<{ count: string }>>(
+      `select count(*)::text as count from outbox_messages where payload #>> '{data,walletId}' = ?`,
+      [zeroBody.id],
+    );
+    expect(events[0]?.count).toBe("0");
 
     const missing = await fetch(`${baseUrl}/wallets/44444444-4444-4444-8444-444444444444`);
     expect(missing.status).toBe(404);

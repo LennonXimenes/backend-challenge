@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { LockMode } from "@mikro-orm/core";
 import { MikroORM, type EntityManager } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
+import { outboxForTransaction } from "../../application/integration/outbox-for-transaction";
 import { decideMovement, movementPayloadHash, type ResolvedReference } from "../../application/wagering/decide-movement";
 import { httpStatusFor, type SubmitWagerResult } from "../../application/wagering/submit-wager";
 import { type StoredWager, WagerRepository } from "../../application/wagering/wager-repository";
@@ -11,6 +13,7 @@ import { WagerTransaction } from "../../domain/wager/wager-transaction";
 import { constraintText } from "./constraint-error";
 import { ledgerRecordFrom } from "./ledger.record";
 import { normalizeAmount } from "./numeric-string.type";
+import { persistOutbox } from "./outbox.record";
 import { WagerRecord, transactionFromRecord, wagerRecordFrom } from "./wager.record";
 import { WalletRecord, walletFromRecord } from "./wallet.record";
 
@@ -55,8 +58,16 @@ export class SqlWagerRepository extends WagerRepository {
         if (decision.entry) {
           applyBalance(walletRecord, wallet);
           em.persist(ledgerRecordFrom(decision.entry));
-          await em.flush();
         }
+        persistOutbox(em, outboxForTransaction({
+          transaction: decision.transaction,
+          wallet,
+          entry: decision.entry,
+          eventId: randomUUID(),
+          balanceEventId: decision.entry ? randomUUID() : undefined,
+          occurredAt: decision.transaction.processedAt ?? decision.transaction.createdAt,
+        }));
+        await em.flush();
 
         return resultFrom(decision.transaction, observed, false);
       }, { clear: true });

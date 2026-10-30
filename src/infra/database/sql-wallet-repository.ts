@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { MikroORM } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
+import { outboxForTransaction } from "../../application/integration/outbox-for-transaction";
 import { WalletRepository } from "../../application/wallets/wallet-repository";
 import { OpenedWallet, Wallet } from "../../domain/wallet/wallet";
 import { WalletAlreadyExistsError } from "../../domain/wallet/wallet-error";
 import { constraintText } from "./constraint-error";
 import { ledgerRecordFrom } from "./ledger.record";
+import { persistOutbox } from "./outbox.record";
 import { wagerRecordFrom } from "./wager.record";
 import { WalletRecord, walletFromRecord, walletRecordFrom } from "./wallet.record";
 
@@ -33,6 +36,14 @@ export class SqlWalletRepository extends WalletRepository {
         }));
         await em.flush();
         em.persist(ledgerRecordFrom(opening.entry));
+        persistOutbox(em, outboxForTransaction({
+          transaction: opening.transaction,
+          wallet,
+          entry: opening.entry,
+          eventId: randomUUID(),
+          balanceEventId: randomUUID(),
+          occurredAt: opening.transaction.processedAt ?? opening.transaction.createdAt,
+        }));
         await em.flush();
       }, { clear: true });
     } catch (error) {

@@ -6,6 +6,7 @@ const walletId = "11111111-1111-4111-8111-111111111111";
 const playerId = "22222222-2222-4222-8222-222222222222";
 const transactionId = "33333333-3333-4333-8333-333333333333";
 const ledgerId = "44444444-4444-4444-8444-444444444444";
+const outboxId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const now = "2026-10-29T21:00:00.000Z";
 
 let orm: MikroORM;
@@ -46,15 +47,22 @@ describe("financial schema", () => {
         'wallet_ledger_entries_one_per_transaction',
         'wallet_ledger_entries_balanced',
         'wager_transactions_observed_balance_non_negative',
-        'wager_transactions_observed_currency_iso'
+        'wager_transactions_observed_currency_iso',
+        'outbox_messages_attempts_non_negative',
+        'outbox_messages_event_type_known'
       )`,
     );
-    expect(new Set(constraints.map((row) => row.conname)).size).toBe(8);
+    expect(new Set(constraints.map((row) => row.conname)).size).toBe(10);
 
     const trigger = await query<{ tgname: string }>(
       `select tgname from pg_trigger where tgname = 'wallet_ledger_entries_no_mutation' and not tgisinternal`,
     );
     expect(trigger).toHaveLength(1);
+
+    const outboxIndex = await query<{ indexname: string }>(
+      `select indexname from pg_indexes where indexname = 'outbox_messages_pending_due'`,
+    );
+    expect(outboxIndex).toHaveLength(1);
   });
 
   test("rejects a duplicate wallet, a negative balance and a second ledger entry", async () => {
@@ -152,6 +160,28 @@ describe("financial schema", () => {
     await expect(query(`delete from wallet_ledger_entries where id = ?::uuid`, [ledgerId])).rejects.toThrow(
       /wallet_ledger_entries is immutable/,
     );
+
+    await query(
+      `insert into outbox_messages (id, aggregate_id, event_type, payload, occurred_at, attempts)
+       values (?::uuid, ?::uuid, 'WagerTransactionRejected', '{"data":{"money":{"amount":"1.00"}}}'::jsonb, ?::timestamptz, 0)`,
+      [outboxId, walletId, now],
+    );
+    await expect(
+      query(
+        `update outbox_messages set payload = '{"data":{"money":{"amount":"2.00"}}}'::jsonb where id = ?::uuid`,
+        [outboxId],
+      ),
+    ).rejects.toThrow(/outbox_messages payload is immutable/);
+    await expect(query(`delete from outbox_messages where id = ?::uuid`, [outboxId])).rejects.toThrow(
+      /outbox_messages is append-only/,
+    );
+    await expect(
+      query(
+        `insert into outbox_messages (id, aggregate_id, event_type, payload, occurred_at, attempts)
+         values (?::uuid, ?::uuid, 'NOT_AN_EVENT', '{}'::jsonb, ?::timestamptz, 0)`,
+        ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", walletId, now],
+      ),
+    ).rejects.toThrow(/outbox_messages_event_type_known/);
   });
 
   test("down drops the financial tables and up brings them back", async () => {
@@ -161,7 +191,7 @@ describe("financial schema", () => {
       `select table_name
        from information_schema.tables
        where table_schema = 'public'
-         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries')`,
+         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages')`,
     );
     expect(gone).toHaveLength(0);
 
@@ -171,8 +201,8 @@ describe("financial schema", () => {
       `select table_name
        from information_schema.tables
        where table_schema = 'public'
-         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries')`,
+         and table_name in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages')`,
     );
-    expect(back).toHaveLength(3);
+    expect(back).toHaveLength(4);
   });
 });

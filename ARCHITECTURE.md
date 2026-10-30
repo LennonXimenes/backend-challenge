@@ -26,7 +26,7 @@ Dinheiro persiste em `numeric(19, 2)`. Não há coluna `float` nem `double preci
 
 Unicidade já coberta: uma wallet por jogador e moeda, uma transação por provedor e id externo, uma idempotency key, um lançamento por wallet e transação, e uma reversão viva (`PENDING`, `PENDING_REFERENCE` ou `PROCESSED`) por referência e tipo.
 
-Inbox e outbox ainda não têm tabela. Entram com a mensageria.
+A outbox grava o envelope do evento em `jsonb`. O valor monetário dentro de `data` é `MoneyProps` (string), nunca a classe `Money`. Inbox ainda não tem tabela.
 
 ## Abertura da wallet
 
@@ -46,6 +46,14 @@ Cada transação grava `observed_balance` e `observed_currency`: o saldo da wall
 
 HTTP deste passo: `201` processada, `202` referência pendente, `422` rejeição de negócio, `400` payload inválido, `404` wallet ausente, `409` conflito de wallet, de id externo ou de payload. O replay reutiliza o status original.
 
+## Outbox
+
+`WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged` e `WagerTransactionPendingReference` são subclasses de `IntegrationEvent`. O `eventType` e a `version` ficam na classe. `correlationId` deste passo é o id da transação. O agregado da transação é o id dela. O de `WalletBalanceChanged` é o id da wallet.
+
+A mesma transação SQL grava a wallet, o ledger, quando existe, e a outbox. `OPENING` com saldo entra com os dois eventos. Saldo inicial zero não gera evento. `REJECTED` e `PENDING_REFERENCE` não geram `WalletBalanceChanged`. Replay não grava de novo. Nada é publicado dentro dessa transação: `published_at` nasce nulo. O publisher ainda não existe.
+
+`scheduleRetry` espera 1s, depois 2s, 4s, com teto de 60s. O índice `outbox_messages_pending_due` deixa as pendentes com `next_attempt_at` nulo na frente. O payload não muda e a linha publicada não volta atrás. Delete é recusado.
+
 ## Ainda em aberto
 
-`LOSS`, `REFUND`, `ROLLBACK`, outbox e o worker de `PENDING_REFERENCE`. A transação SQL ainda não grava outbox. A corrida de duas apostas ainda não tem teste.
+`LOSS`, `REFUND`, `ROLLBACK`, o publisher da outbox e o worker de `PENDING_REFERENCE`. `WagerTransactionProcessed` ainda não cobre `LOSS`. A corrida de duas apostas ainda não tem teste.
