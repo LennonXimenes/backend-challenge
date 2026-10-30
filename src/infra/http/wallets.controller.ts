@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query } from "@n
 import { GetWallet } from "../../application/wallets/get-wallet";
 import { ListLedger } from "../../application/wallets/list-ledger";
 import { OpenWallet } from "../../application/wallets/open-wallet";
+import { ReconcileWallet } from "../../application/wallets/reconcile-wallet";
 import { writeOperationLog } from "../../application/observability/operation-log";
 import { parseOpenWalletBody } from "./parse-open-wallet";
 
@@ -11,6 +12,7 @@ export class WalletsController {
     private readonly openWallet: OpenWallet,
     private readonly getWallet: GetWallet,
     private readonly listLedger: ListLedger,
+    private readonly reconcileWallet: ReconcileWallet,
   ) {}
 
   @Post()
@@ -24,6 +26,20 @@ export class WalletsController {
       walletId: wallet.id,
     });
     return wallet.toJSON();
+  }
+
+  @Post(":walletId/reconciliation")
+  @HttpCode(200)
+  async reconcile(@Param("walletId") walletId: string) {
+    const result = await this.reconcileWallet.execute(walletId);
+    return {
+      walletId: result.walletId,
+      storedBalance: result.storedBalance.toJSON(),
+      calculatedBalance: result.calculatedBalance.toJSON(),
+      difference: result.difference.toJSON(),
+      consistent: result.consistent,
+      checkedEntries: result.checkedEntries,
+    };
   }
 
   @Get(":walletId/ledger")

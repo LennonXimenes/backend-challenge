@@ -11,6 +11,7 @@ import { WalletLedgerEntry } from "../../domain/wallet/wallet-ledger-entry";
 import { InvalidWalletInputError, WalletAlreadyExistsError } from "../../domain/wallet/wallet-error";
 import { constraintText } from "./constraint-error";
 import { LedgerRecord, ledgerRecordFrom } from "./ledger.record";
+import { normalizeAmount } from "./numeric-string.type";
 import { persistOutbox } from "./outbox.record";
 import { wagerRecordFrom } from "./wager.record";
 import { WalletRecord, walletFromRecord, walletRecordFrom } from "./wallet.record";
@@ -98,5 +99,22 @@ export class SqlWalletRepository extends WalletRepository {
       balanceAfter: Money.from({ amount: record.balanceAfter, currency: record.currency }),
       createdAt: record.createdAt,
     }));
+  }
+
+  async sumLedger(walletId: string): Promise<{ amount: string; entries: number }> {
+    const rows = await this.orm.em.getConnection().execute<Array<{ calculated: string; entries: string }>>(
+      `select coalesce(sum(case when direction = 'CREDIT' then amount else -amount end), 0)::text as calculated,
+              count(*)::text as entries
+       from wallet_ledger_entries
+       where wallet_id = ?::uuid`,
+      [walletId],
+    );
+    const calculated = rows[0]?.calculated ?? "0";
+    const entries = rows[0]?.entries ?? "0";
+    if (!/^\d+$/.test(entries)) {
+      throw new Error("ledger entry count is not an integer");
+    }
+
+    return { amount: normalizeAmount(calculated.trim()), entries: Number(entries) };
   }
 }

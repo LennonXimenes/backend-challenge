@@ -5,4 +5,5 @@ export abstract class WalletRepository {
   abstract save(opened: OpenedWallet): Promise<void>;
   abstract findById(walletId: string): Promise<Wallet | undefined>;
   abstract listEntries(walletId: string, afterId: string | undefined, limit: number): Promise<WalletLedgerEntry[]>;
+  abstract sumLedger(walletId: string): Promise<{ amount: string; entries: number }>;
 }

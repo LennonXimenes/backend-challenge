@@ -9,6 +9,7 @@ export interface MetricsSnapshot {
   dlq: number;
   lockConflicts: number;
   outboxLagMs: number | null;
+  reconciliationDivergences: number;
   latencyMsCount: number;
   latencyMsSum: number;
 }
@@ -19,6 +20,7 @@ const counters = {
   retries: 0,
   dlq: 0,
   lockConflicts: 0,
+  reconciliationDivergences: 0,
   outboxLagMs: null as number | null,
   latencyMsCount: 0,
   latencyMsSum: 0,
@@ -50,6 +52,10 @@ export function recordLockConflict(): void {
   counters.lockConflicts += 1;
 }
 
+export function recordReconciliationDivergence(): void {
+  counters.reconciliationDivergences += 1;
+}
+
 export function recordOutboxLag(lagMs: number): void {
   const lag = wholeMilliseconds(lagMs);
   if (lag !== undefined) {
@@ -69,6 +75,7 @@ export function metricsSnapshot(): MetricsSnapshot {
     retries: counters.retries,
     dlq: counters.dlq,
     lockConflicts: counters.lockConflicts,
+    reconciliationDivergences: counters.reconciliationDivergences,
     outboxLagMs: counters.outboxLagMs,
     latencyMsCount: counters.latencyMsCount,
     latencyMsSum: counters.latencyMsSum,
@@ -81,6 +88,7 @@ export function resetMetrics(): void {
   counters.retries = 0;
   counters.dlq = 0;
   counters.lockConflicts = 0;
+  counters.reconciliationDivergences = 0;
   counters.outboxLagMs = null;
   counters.latencyMsCount = 0;
   counters.latencyMsSum = 0;
